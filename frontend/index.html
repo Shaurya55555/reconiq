@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ReconIQ - Multi-source Reconciliation Agent</title>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #131a22; --border: #232d38; --text: #e6edf3;
+    --muted: #8b98a5; --accent: #4fd1c5; --bad: #f47174; --warn: #f2c94c; --good: #6fcf97;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 24px 32px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 32px; }
+  button { background: var(--accent); color: #04211d; border: none; padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  input[type=number], input[type=text] { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 8px 10px; border-radius: 6px; }
+  .row { display: flex; gap: 12px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .card .value { font-size: 26px; font-weight: 700; margin-top: 6px; }
+  .value.good { color: var(--good); } .value.warn { color: var(--warn); } .value.bad { color: var(--bad); }
+  section { margin-bottom: 28px; }
+  h2 { font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  tr:hover td { background: #16202a; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .tag.exact { background: #123a35; color: var(--good); }
+  .tag.fuzzy { background: #3a3312; color: var(--warn); }
+  .tag.llm { background: #1a2b4a; color: #7aa2f7; }
+  .tag.exception { background: #3a1414; color: var(--bad); }
+  #chat-log { max-height: 220px; overflow-y: auto; margin-bottom: 10px; }
+  #chat-log .msg { padding: 8px 12px; border-radius: 8px; margin-bottom: 8px; font-size: 13px; }
+  #chat-log .q { background: #16202a; }
+  #chat-log .a { background: var(--panel); border: 1px solid var(--border); }
+  #status { color: var(--muted); font-size: 13px; }
+  .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>ReconIQ</h1>
+    <p>Multi-source reconciliation agent &middot; orders &times; Razorpay settlements &times; bank statement</p>
+  </div>
+  <div id="provider-badge" style="color: var(--muted); font-size: 12px;"></div>
+</header>
+<main>
+  <div class="row">
+    <label>Orders in batch: <input id="n-orders" type="number" value="70" min="10" max="500"></label>
+    <button id="run-btn">Run reconciliation</button>
+    <span id="status"></span>
+  </div>
+
+  <div class="cards" id="cards" style="display:none">
+    <div class="card"><div class="label">Match rate</div><div class="value" id="c-match-rate">--</div></div>
+    <div class="card"><div class="label">Matched</div><div class="value" id="c-matched">--</div></div>
+    <div class="card"><div class="label">Exceptions</div><div class="value" id="c-exceptions">--</div></div>
+    <div class="card"><div class="label">Throughput</div><div class="value" id="c-throughput">--</div></div>
+  </div>
+
+  <section id="exceptions-section" style="display:none">
+    <h2>Exception list (honest, not cherry-picked)</h2>
+    <div id="exceptions-table"></div>
+  </section>
+
+  <section id="matches-section" style="display:none">
+    <h2>Matches by method</h2>
+    <div id="matches-table"></div>
+  </section>
+
+  <section id="audit-section" style="display:none">
+    <h2>Audit trail (last 30 decisions)</h2>
+    <div id="audit-table"></div>
+  </section>
+
+  <section id="chat-section" style="display:none">
+    <h2>Ask about this run</h2>
+    <div id="chat-log"></div>
+    <div class="row" style="margin-bottom:0">
+      <input id="chat-input" type="text" placeholder="e.g. how many exceptions and why?" style="flex:1; min-width:280px">
+      <button id="chat-btn">Ask</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const API = "";
+let currentRunId = null;
+
+const $ = (id) => document.getElementById(id);
+
+function pct(x) { return (x * 100).toFixed(1) + "%"; }
+
+function tagFor(method) {
+  return `<span class="tag ${method}">${method}</span>`;
+}
+
+async function runReconciliation() {
+  const n = parseInt($("n-orders").value, 10) || 70;
+  $("run-btn").disabled = true;
+  $("status").textContent = "Generating batch and reconciling...";
+  try {
+    const res = await fetch(`${API}/api/run`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ n_orders: n }),
+    });
+    const data = await res.json();
+    currentRunId = data.run_id;
+    renderSummary(data.summary);
+    await Promise.all([loadRunDetail(), loadAudit()]);
+    $("status").textContent = `Run ${currentRunId} complete.`;
+    ["cards", "exceptions-section", "matches-section", "audit-section", "chat-section"]
+      .forEach((id) => $(id).style.display = "");
+  } catch (e) {
+    $("status").textContent = "Error: " + e;
+  } finally {
+    $("run-btn").disabled = false;
+  }
+}
+
+function renderSummary(s) {
+  $("c-match-rate").textContent = pct(s.match_rate);
+  $("c-match-rate").className = "value " + (s.match_rate >= 0.9 ? "good" : s.match_rate >= 0.75 ? "warn" : "bad");
+  $("c-matched").textContent = `${s.matched} / ${s.total_orders}`;
+  $("c-exceptions").textContent = s.exception_count;
+  $("c-exceptions").className = "value " + (s.exception_count === 0 ? "good" : "warn");
+  $("c-throughput").textContent = `${s.throughput_records_per_sec} rec/s`;
+  $("provider-badge").textContent = "LLM layer: " + s.llm_provider;
+}
+
+async function loadRunDetail() {
+  const res = await fetch(`${API}/api/runs/${currentRunId}`);
+  const data = await res.json();
+  renderExceptions(data.exceptions);
+  renderMatches(data.matches);
+}
+
+function renderExceptions(exceptions) {
+  if (!exceptions.length) {
+    $("exceptions-table").innerHTML = '<div class="empty">No exceptions in this run.</div>';
+    return;
+  }
+  let rows = exceptions.map(e => `
+    <tr>
+      <td><span class="tag exception">${e.type}</span></td>
+      <td>${e.order_id ?? e.bank_line_id ?? "-"}</td>
+      <td>${e.reason}</td>
+    </tr>`).join("");
+  $("exceptions-table").innerHTML = `
+    <table><thead><tr><th>Type</th><th>Entity</th><th>Reason</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+function renderMatches(matches) {
+  const byMethod = {};
+  matches.forEach(m => { (byMethod[m.method] = byMethod[m.method] || []).push(m); });
+  let html = "";
+  for (const method of ["exact", "fuzzy", "llm"]) {
+    const list = byMethod[method] || [];
+    if (!list.length) continue;
+    const rows = list.slice(0, 8).map(m => `
+      <tr><td>${tagFor(m.method)}</td><td>${m.order_id}</td><td>${m.confidence}</td><td>${m.note}</td></tr>`).join("");
+    html += `<h3 style="font-size:13px;color:var(--muted);margin:14px 0 6px">${method} (${list.length})</h3>
+      <table><thead><tr><th>Method</th><th>Order</th><th>Confidence</th><th>Note</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  }
+  $("matches-table").innerHTML = html || '<div class="empty">No matches.</div>';
+}
+
+async function loadAudit() {
+  const res = await fetch(`${API}/api/runs/${currentRunId}/audit`);
+  const data = await res.json();
+  const trail = data.audit_trail.slice(-30).reverse();
+  const rows = trail.map(a => `
+    <tr>
+      <td>${a.step}</td>
+      <td>${tagFor(a.decision === "exception" ? "exception" : a.method)}</td>
+      <td>${a.confidence}</td>
+      <td>${a.order_id ?? a.bank_line_id ?? "-"}</td>
+      <td>${a.note}</td>
+    </tr>`).join("");
+  $("audit-table").innerHTML = `
+    <table><thead><tr><th>Step</th><th>Decision</th><th>Conf.</th><th>Entity</th><th>Note</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+async function askQuestion() {
+  const q = $("chat-input").value.trim();
+  if (!q || !currentRunId) return;
+  $("chat-log").innerHTML += `<div class="msg q"><b>You:</b> ${q}</div>`;
+  $("chat-input").value = "";
+  const res = await fetch(`${API}/api/runs/${currentRunId}/ask`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question: q }),
+  });
+  const data = await res.json();
+  $("chat-log").innerHTML += `<div class="msg a"><b>ReconIQ:</b> ${data.answer}</div>`;
+  $("chat-log").scrollTop = $("chat-log").scrollHeight;
+}
+
+$("run-btn").addEventListener("click", runReconciliation);
+$("chat-btn").addEventListener("click", askQuestion);
+$("chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") askQuestion(); });
+</script>
+</body>
+</html>
