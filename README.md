@@ -33,6 +33,44 @@ ReconIQ closes that loop automatically on a batch of orders:
    `duplicate_candidate`, `duplicate_order_reference`,
    `unrecognized_narration`, `unrecognized_bank_line`), never silently
    dropped.
+5. **Human-in-the-loop override** — a reviewer can accept a shaky match,
+   reject one back to an exception, or manually pair an exception with an
+   unclaimed bank line via `POST /api/override`, logged distinctly as
+   `human_override` in the audit trail so it's never confused with an
+   automated decision.
+
+## Money-weighted accuracy, and the two ways to be wrong
+
+Transaction-count accuracy ("96% correct") treats a ₹200 order and a
+₹2,00,000 order identically. `scoring.py` also reports **amount
+accuracy** (rupee-weighted) and splits the wrong 4% into two failure
+modes that are not equally bad:
+
+- **False clear** — confidently wrong: matched when it should have been
+  an exception. The dangerous failure — money moves that shouldn't have.
+- **Safe miss** — conservative: excepted when it should have matched.
+  Money just sits flagged for review instead of moving wrong.
+
+A real run against the live deployment: **0 false-clear amount** in both
+the rules-only and rules+AI passes on the same batch — every mistake the
+system made was a safe miss, never a confident wrong match.
+
+## Rules-only vs. rules+AI, same batch
+
+`POST /api/run` also runs a rules-only counterfactual (the LLM stage
+skipped entirely) alongside the real pass, so the dashboard can *show*
+what the AI layer contributes instead of asserting it. One real run:
+
+```
+                    Rules only   Rules + AI
+match rate             82.9%        91.4%
+ground-truth accuracy  91.4%       100.0%
+amount at risk        ₹3,57,802   ₹1,56,903
+```
+
+The AI layer only ever touches what the rules alone left as an
+exception — it doesn't get a chance to make a clean rule-based decision
+worse.
 
 Every decision, at every stage, is written to an audit trail: which
 record, which method decided it, at what confidence, and why. The
