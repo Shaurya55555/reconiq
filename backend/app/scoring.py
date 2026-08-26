@@ -60,7 +60,7 @@ def score_against_ground_truth(orders: list[dict], final_result: dict[str, Any])
             correct = exception_type_by_order.get(order["order_id"]) == expected_exception_type
 
         rows.append({
-            "order_id": order["order_id"], "truth": truth,
+            "order_id": order["order_id"], "truth": truth, "amount": order["amount"],
             "expected_outcome": expected_outcome, "actual_outcome": actual_outcome,
             "actual_exception_type": exception_type_by_order.get(order["order_id"]),
             "correct": correct,
@@ -75,10 +75,31 @@ def score_against_ground_truth(orders: list[dict], final_result: dict[str, Any])
         bucket["total"] += 1
         bucket["correct"] += int(r["correct"])
 
+    # Money-weighted accuracy: transaction-count accuracy treats a ₹200
+    # order and a ₹2,00,000 order identically. A finance controller doesn't
+    # -- a wrong decision on the big one is a materially different problem
+    # than a wrong decision on the small one. Two failure modes are also
+    # distinguished, since they're not equally bad:
+    #  - false clear: expected an exception, but it got matched anyway --
+    #    confidently wrong, money moves that shouldn't have been cleared.
+    #  - safe miss: expected a match, but it landed as an exception -- the
+    #    conservative failure, money sits flagged instead of moving wrong.
+    total_amount = sum(r["amount"] for r in rows)
+    correct_amount = sum(r["amount"] for r in rows if r["correct"])
+    false_clear_amount = sum(r["amount"] for r in rows
+                              if not r["correct"] and r["expected_outcome"] == "exception"
+                              and r["actual_outcome"] == "matched")
+    safe_miss_amount = sum(r["amount"] for r in rows
+                            if not r["correct"] and r["expected_outcome"] == "matched"
+                            and r["actual_outcome"] != "matched")
+
     return {
         "ground_truth_accuracy": round(correct_count / total, 4) if total else 0.0,
         "correct": correct_count,
         "total": total,
         "by_category": by_category,
         "misclassified": [r for r in rows if not r["correct"]],
+        "amount_accuracy": round(correct_amount / total_amount, 4) if total_amount else 0.0,
+        "false_clear_amount": round(false_clear_amount, 2),
+        "safe_miss_amount": round(safe_miss_amount, 2),
     }

@@ -71,6 +71,14 @@
     <button id="run-btn">Run reconciliation</button>
     <span id="status"></span>
   </div>
+  <div class="row" style="margin-top:-12px">
+    <label title="Auto-accept bar for an LLM-proposed match">LLM confidence threshold:
+      <input id="confidence-threshold" type="number" value="0.6" min="0" max="1" step="0.05" style="width:70px"></label>
+    <label title="Max settlement-vs-order amount difference treated as a plausible fee, not a mismatch">Fee tolerance %:
+      <input id="fee-tolerance" type="number" value="3" min="0" max="50" step="0.5" style="width:60px"></label>
+    <label title="Settlement date drift beyond this many days is flagged as fuzzy, not exact">Date drift OK (days):
+      <input id="date-drift" type="number" value="3" min="0" max="30" style="width:60px"></label>
+  </div>
 
   <div class="cards" id="cards" style="display:none">
     <div class="card"><div class="label">Ground-truth accuracy</div><div class="value" id="c-accuracy">--</div></div>
@@ -88,6 +96,23 @@
     Ground-truth accuracy is scored against the known-correct label seeded into each synthetic order
     (not visible to the matcher) &mdash; match rate alone only tells you volume, not correctness.
   </p>
+
+  <div class="cards" id="money-weighted-cards" style="display:none">
+    <div class="card"><div class="label">Amount accuracy</div><div class="value" id="c-amount-accuracy">--</div></div>
+    <div class="card"><div class="label">False-clear amount</div><div class="value bad" id="c-false-clear">--</div></div>
+    <div class="card"><div class="label">Safe-miss amount</div><div class="value warn" id="c-safe-miss">--</div></div>
+  </div>
+  <p id="money-weighted-note" style="display:none; color:var(--muted); font-size:12px; margin:-16px 0 20px">
+    Transaction-count accuracy treats every order equally; amount accuracy weights by rupee value.
+    False-clear = confidently wrong (matched when it should have been an exception, the dangerous
+    failure). Safe-miss = conservative (flagged as an exception when it should have matched, money
+    just sits reviewable instead of moving wrong).
+  </p>
+
+  <section id="rules-only-section" style="display:none">
+    <h2>Rules only vs. Rules + AI (same batch)</h2>
+    <div id="rules-only-table"></div>
+  </section>
 
   <section id="charts-section" style="display:none">
     <div class="charts">
@@ -153,12 +178,18 @@ async function runReconciliation() {
   const n = parseInt($("n-orders").value, 10) || 70;
   const seedVal = $("seed").value.trim();
   const seed = seedVal === "" ? null : parseInt(seedVal, 10);
+  const confidenceThreshold = parseFloat($("confidence-threshold").value);
+  const feeTolerancePct = parseFloat($("fee-tolerance").value) / 100;
+  const dateDriftOkDays = parseInt($("date-drift").value, 10);
   $("run-btn").disabled = true;
   $("status").textContent = "Generating batch and reconciling...";
   try {
     const res = await fetch(`${API}/api/run`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ n_orders: n, seed }),
+      body: JSON.stringify({
+        n_orders: n, seed, confidence_threshold: confidenceThreshold,
+        fee_tolerance_pct: feeTolerancePct, date_drift_ok_days: dateDriftOkDays,
+      }),
     });
     if (!res.ok) throw new Error(`API returned ${res.status}`);
     currentRun = await res.json();
@@ -179,10 +210,27 @@ function renderAll() {
   renderMatches(currentRun.matches);
   renderAudit(currentRun.audit_trail);
   renderMisclassified(currentRun.ground_truth);
+  renderRulesOnlyComparison(currentRun.rules_only_summary, currentRun.summary);
 
   const sections = ["cards", "charts-section", "exceptions-section", "matches-section", "audit-section", "chat-section"];
   if (currentRun.ground_truth && currentRun.ground_truth.misclassified.length) sections.push("misclassified-section");
+  if (currentRun.rules_only_summary) sections.push("rules-only-section");
   sections.forEach((id) => $(id).style.display = "");
+}
+
+function renderRulesOnlyComparison(rulesOnly, withAi) {
+  if (!rulesOnly) return;
+  const rows = [
+    ["Match rate", pct(rulesOnly.match_rate), pct(withAi.match_rate)],
+    ["Exceptions", rulesOnly.exception_count, withAi.exception_count],
+    ["Ground-truth accuracy", pct(rulesOnly.ground_truth_accuracy), pct(withAi.ground_truth_accuracy)],
+    ["Amount at risk", rupees(rulesOnly.total_amount_at_risk), rupees(withAi.total_amount_at_risk)],
+  ];
+  $("rules-only-table").innerHTML = `
+    <table><thead><tr><th></th><th>Rules only</th><th>Rules + AI</th></tr></thead>
+    <tbody>${rows.map(([label, a, b]) => `<tr><td>${label}</td><td>${a}</td><td>${b}</td></tr>`).join("")}</tbody></table>
+    <p style="color:var(--muted);font-size:12px;margin-top:10px">Same batch, same seed, both passes run for comparison &mdash;
+      the AI layer only ever touches what the rules alone left as an exception.</p>`;
 }
 
 async function submitOverride(action, orderId, bankLineId, reviewerNote) {
@@ -230,6 +278,15 @@ function renderSummary(s) {
     $("c-amount-at-risk").textContent = rupees(s.total_amount_at_risk);
     $("c-amount-at-risk").className = "value " + (s.total_amount_at_risk === 0 ? "good" : "bad");
     $("amount-cards").style.display = "";
+  }
+
+  if (typeof s.amount_accuracy === "number") {
+    $("c-amount-accuracy").textContent = pct(s.amount_accuracy);
+    $("c-amount-accuracy").className = "value " + (s.amount_accuracy >= 0.95 ? "good" : "warn");
+    $("c-false-clear").textContent = rupees(s.false_clear_amount);
+    $("c-safe-miss").textContent = rupees(s.safe_miss_amount);
+    $("money-weighted-cards").style.display = "";
+    $("money-weighted-note").style.display = "";
   }
 }
 

@@ -153,6 +153,63 @@ def test_override_manual_match_clears_prior_exceptions_for_both_sides():
     }
 
 
+def test_fee_tolerance_is_a_real_parameter_not_a_fixed_constant():
+    batch = data_gen.generate_batch(n_orders=150, seed=17)
+    strict = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                fee_tolerance_pct=0.0)
+    lenient = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                 fee_tolerance_pct=0.5)
+    # a near-zero tolerance can only match fewer (or equal) fee-adjusted
+    # orders than a very lenient one on the identical batch
+    assert len(strict["matches"]) <= len(lenient["matches"])
+
+
+def test_date_drift_tolerance_changes_classification_not_amount_mismatch_outcome():
+    """date_drift_ok_days should only affect how an exact-amount match is
+    labeled (exact vs fuzzy/date-drifted) -- it must never rescue a
+    genuine amount_mismatch into a match just because that settlement's
+    date drift happens to exceed a tightened threshold. Regression test
+    for a real bug: the date-drift branch used to fire independently of
+    amount closeness.
+    """
+    batch = data_gen.generate_batch(n_orders=150, seed=17)
+
+    strict = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                date_drift_ok_days=0)
+    lenient = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                 date_drift_ok_days=365)
+
+    # total matched count is unaffected -- only exact vs fuzzy labeling shifts
+    assert len(strict["matches"]) == len(lenient["matches"])
+    assert sum(1 for m in strict["matches"] if m["method"] == "exact") \
+        <= sum(1 for m in lenient["matches"] if m["method"] == "exact")
+
+    amount_mismatch_orders = {o["order_id"] for o in batch["orders"] if o["_truth"] == "amount_mismatch"}
+    strict_matched = {m["order_id"] for m in strict["matches"]}
+    assert not (amount_mismatch_orders & strict_matched), \
+        "a tightened date tolerance must never rescue a genuine amount mismatch into a match"
+
+
+def test_money_weighted_accuracy_distinguishes_false_clears_from_safe_misses():
+    orders = [
+        {"order_id": "ORD_CLEAN_BIG", "amount": 100000.0, "_truth": "clean"},
+        {"order_id": "ORD_MISMATCH_BIG", "amount": 50000.0, "_truth": "amount_mismatch"},
+        {"order_id": "ORD_CLEAN_SMALL", "amount": 100.0, "_truth": "clean"},
+    ]
+    result = {
+        "matches": [
+            {"order_id": "ORD_CLEAN_BIG"},
+            {"order_id": "ORD_MISMATCH_BIG"},  # wrongly cleared -- should have been an exception
+            # ORD_CLEAN_SMALL missing entirely -- wrongly excepted (safe miss)
+        ],
+        "exceptions": [],
+    }
+    scored = scoring.score_against_ground_truth(orders, result)
+    assert scored["false_clear_amount"] == 50000.0
+    assert scored["safe_miss_amount"] == 100.0
+    assert scored["amount_accuracy"] == round(100000.0 / 150100.0, 4)
+
+
 def test_override_rejects_unknown_action_and_missing_target():
     with pytest.raises(ValueError):
         matcher.apply_override([], [], [], "delete_everything", "ORD1")

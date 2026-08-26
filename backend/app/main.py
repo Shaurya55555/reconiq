@@ -25,12 +25,21 @@ class RunRequest(BaseModel):
     n_orders: int = 70
     seed: int | None = None
     confidence_threshold: float | None = None
+    fee_tolerance_pct: float = matcher.FEE_TOLERANCE_PCT
+    date_drift_ok_days: int = matcher.DATE_DRIFT_OK_DAYS
 
 
 class AskRequest(BaseModel):
     question: str
     summary: dict
     exceptions: list[dict]
+
+
+def _apply_ground_truth_to_summary(summary: dict, ground_truth: dict) -> None:
+    summary["ground_truth_accuracy"] = ground_truth["ground_truth_accuracy"]
+    summary["amount_accuracy"] = ground_truth["amount_accuracy"]
+    summary["false_clear_amount"] = ground_truth["false_clear_amount"]
+    summary["safe_miss_amount"] = ground_truth["safe_miss_amount"]
 
 
 class OverrideRequest(BaseModel):
@@ -58,7 +67,20 @@ def run_reconciliation(req: RunRequest):
 
     t0 = time.perf_counter()
     batch = data_gen.generate_batch(n_orders=req.n_orders, seed=req.seed)
-    rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"])
+    rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                     fee_tolerance_pct=req.fee_tolerance_pct,
+                                     date_drift_ok_days=req.date_drift_ok_days)
+
+    # Rules-only counterfactual: what the deterministic passes alone would
+    # have produced, with every LLM-deferred case landing as an honest
+    # exception instead of being resolved. Computed on the same batch so
+    # the "why does the LLM exist" comparison is apples-to-apples, not a
+    # separate cherry-picked run.
+    rules_only = matcher.apply_llm_resolutions(rule_result, llm_resolve_fn=None, confidence_threshold=threshold)
+    rules_only_summary = matcher.summarize(batch["orders"], rules_only)
+    rules_only_ground_truth = scoring.score_against_ground_truth(batch["orders"], rules_only)
+    _apply_ground_truth_to_summary(rules_only_summary, rules_only_ground_truth)
+
     final = matcher.apply_llm_resolutions(rule_result, llm_resolver.resolve, confidence_threshold=threshold)
     elapsed = time.perf_counter() - t0
 
@@ -67,9 +89,11 @@ def run_reconciliation(req: RunRequest):
     summary["elapsed_seconds"] = round(elapsed, 3)
     summary["llm_provider"] = os.getenv("LLM_PROVIDER", "heuristic (offline fallback)")
     summary["confidence_threshold"] = threshold
+    summary["fee_tolerance_pct"] = req.fee_tolerance_pct
+    summary["date_drift_ok_days"] = req.date_drift_ok_days
 
     ground_truth = scoring.score_against_ground_truth(batch["orders"], final)
-    summary["ground_truth_accuracy"] = ground_truth["ground_truth_accuracy"]
+    _apply_ground_truth_to_summary(summary, ground_truth)
 
     run_id = store.new_run({"summary": summary, "n_orders": req.n_orders})
 
@@ -81,6 +105,7 @@ def run_reconciliation(req: RunRequest):
         "exceptions": final["exceptions"],
         "audit_trail": final["audit_trail"],
         "ground_truth": ground_truth,
+        "rules_only_summary": rules_only_summary,
     }
 
 
@@ -113,7 +138,7 @@ def override(req: OverrideRequest):
     summary = matcher.summarize(req.orders, result)
     summary["llm_provider"] = os.getenv("LLM_PROVIDER", "heuristic (offline fallback)")
     ground_truth = scoring.score_against_ground_truth(req.orders, result)
-    summary["ground_truth_accuracy"] = ground_truth["ground_truth_accuracy"]
+    _apply_ground_truth_to_summary(summary, ground_truth)
 
     return {
         "summary": summary,

@@ -45,6 +45,16 @@ def test_override_endpoint_rejects_a_shaky_match_and_updates_summary():
     assert body["summary"]["matched"] == run["summary"]["matched"] - 1
 
 
+def test_run_endpoint_includes_rules_only_counterfactual():
+    run = client.post("/api/run", json={"n_orders": 100, "seed": 5}).json()
+    rules_only = run["rules_only_summary"]
+
+    assert "llm" not in rules_only["by_method"]
+    # rules-only can only match fewer or equal orders than rules+AI on the same batch
+    assert rules_only["matched"] <= run["summary"]["matched"]
+    assert rules_only["exception_count"] >= run["summary"]["exception_count"]
+
+
 def test_override_endpoint_returns_400_for_unknown_action():
     run = client.post("/api/run", json={"n_orders": 20, "seed": 4}).json()
     res = client.post("/api/override", json={

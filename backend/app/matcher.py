@@ -28,7 +28,13 @@ def _parse_date(s: str) -> date:
 
 
 def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict],
-              llm_resolve_fn=None) -> dict[str, Any]:
+              fee_tolerance_pct: float = FEE_TOLERANCE_PCT,
+              date_drift_ok_days: int = DATE_DRIFT_OK_DAYS) -> dict[str, Any]:
+    """fee_tolerance_pct and date_drift_ok_days are policy, not physics --
+    a real merchant's actual fee schedule and settlement SLA would set
+    these, so they're parameters with the current constants as defaults,
+    not hardcoded thresholds baked into the pass logic below.
+    """
     audit: list[dict] = []
     matches: list[dict] = []
     exceptions: list[dict] = []
@@ -93,13 +99,21 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
             date_drift = abs((_parse_date(stl["settled_at"]) - _parse_date(order["created_at"])).days)
 
             if amount_diff_pct < 0.001 and bank_hit["amount"] == stl["amount"]:
-                picked = (stl, bank_hit, "exact", 1.0, "UTR + amount matched exactly")
-            elif amount_diff_pct <= FEE_TOLERANCE_PCT and bank_hit["amount"] == stl["amount"]:
+                # Exact amount is necessary but not sufficient for "exact":
+                # date drift is checked here too, not in a separate branch,
+                # specifically so a genuinely wrong amount elsewhere can
+                # never get waved through just because it coincides with a
+                # large date drift -- that was a real bug caught by a test
+                # exercising a strict date_drift_ok_days value.
+                if date_drift <= date_drift_ok_days:
+                    picked = (stl, bank_hit, "exact", 1.0, "UTR + amount matched exactly")
+                else:
+                    picked = (stl, bank_hit, "fuzzy", 0.85,
+                              f"UTR + amount matched exactly; settlement date drifted {date_drift}d "
+                              f"beyond the {date_drift_ok_days}d policy window")
+            elif amount_diff_pct <= fee_tolerance_pct and bank_hit["amount"] == stl["amount"]:
                 picked = (stl, bank_hit, "fuzzy", 0.9,
                           f"UTR matched; amount differs by {amount_diff_pct:.1%}, within fee tolerance")
-            elif date_drift > DATE_DRIFT_OK_DAYS and bank_hit["amount"] == stl["amount"]:
-                picked = (stl, bank_hit, "fuzzy", 0.85,
-                          f"UTR + amount matched; settlement date drifted {date_drift}d")
             else:
                 continue
             break
@@ -117,7 +131,7 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
         else:
             stl = candidate_settlements[0]
             amount_diff_pct = abs(stl["amount"] - order["amount"]) / order["amount"]
-            if amount_diff_pct > FEE_TOLERANCE_PCT:
+            if amount_diff_pct > fee_tolerance_pct:
                 # amount is genuinely off, not fee-sized -> not an LLM question
                 exceptions.append({
                     "type": "amount_mismatch", "order_id": order["order_id"],
