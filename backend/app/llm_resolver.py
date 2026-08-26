@@ -100,10 +100,12 @@ def _call_anthropic(case, candidates) -> dict | None:
 
 
 def _call_gemini(case, candidates) -> dict | None:
-    import google.generativeai as genai
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    model = genai.GenerativeModel(os.getenv("LLM_MODEL", "gemini-1.5-flash"))
-    resp = model.generate_content(SYSTEM_PROMPT + "\n\n" + _build_user_prompt(case, candidates))
+    from google import genai
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    resp = client.models.generate_content(
+        model=os.getenv("LLM_MODEL", "gemini-flash-lite-latest"),
+        contents=SYSTEM_PROMPT + "\n\n" + _build_user_prompt(case, candidates),
+    )
     match = re.search(r"\{.*\}", resp.text, re.DOTALL)
     return json.loads(match.group(0)) if match else None
 
@@ -193,6 +195,24 @@ def answer_question(question: str, summary: dict, exceptions: list[dict]) -> str
                 messages=[{"role": "user", "content": context}],
             )
             return resp.content[0].text
+        if provider == "gemini":
+            from google import genai
+            client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+            resp = client.models.generate_content(
+                model=os.getenv("LLM_MODEL", "gemini-flash-lite-latest"),
+                contents=QA_SYSTEM_PROMPT + "\n\n" + context,
+            )
+            return resp.text
+        if provider == "ollama":
+            import httpx
+            resp = httpx.post(
+                f"{os.getenv('OLLAMA_HOST', 'http://localhost:11434')}/api/generate",
+                json={"model": os.getenv("LLM_MODEL", "llama3.1"),
+                      "prompt": QA_SYSTEM_PROMPT + "\n\n" + context, "stream": False},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            return resp.json()["response"]
     except Exception as exc:
         return f"[{provider} call failed: {exc}] " + _heuristic_answer(question, summary, exceptions)
     return _heuristic_answer(question, summary, exceptions)
