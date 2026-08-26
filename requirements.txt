@@ -1,0 +1,10 @@
+fastapi>=0.115
+pydantic>=2.11
+python-dotenv>=1.0
+httpx>=0.28
+
+# LLM providers -- keep all three available so switching LLM_PROVIDER on
+# Vercel's env vars doesn't require a dependency change too.
+google-generativeai>=0.8
+anthropic>=0.40
+openai>=1.55
