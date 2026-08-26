@@ -54,6 +54,21 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
     # ---- pass 1 & 2: rule-based, per payment_id ----
     for payment_id, orders_for_payment in orders_by_payment.items():
         order = orders_for_payment[0]
+
+        # Two orders should never share a payment_id in real Razorpay data,
+        # but if they did, only `order` above gets reconciled against this
+        # payment_id's settlements -- the rest must be surfaced explicitly,
+        # never silently skipped.
+        for extra_order in orders_for_payment[1:]:
+            exceptions.append({
+                "type": "duplicate_order_reference", "order_id": extra_order["order_id"],
+                "reason": f"Order shares razorpay_payment_id {payment_id} with "
+                          f"{order['order_id']}; only one order per payment_id can be "
+                          "reconciled against that payment_id's settlements.",
+            })
+            log("payment_id_dedupe", "exception", "rule", 1.0,
+                "duplicate payment_id across orders", order_id=extra_order["order_id"])
+
         candidate_settlements = settlements_by_payment.get(payment_id, [])
 
         if not candidate_settlements:
@@ -146,10 +161,19 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
     }
 
 
-def apply_llm_resolutions(rule_result: dict, llm_resolve_fn) -> dict:
+DEFAULT_LLM_CONFIDENCE_THRESHOLD = 0.6
+
+
+def apply_llm_resolutions(rule_result: dict, llm_resolve_fn,
+                           confidence_threshold: float = DEFAULT_LLM_CONFIDENCE_THRESHOLD) -> dict:
     """Second pass: hand every rule-deferred case to the LLM resolver and
     fold its verdicts back into matches/exceptions/audit_trail. Runs even
     when there's nothing to resolve, so the shape of the result is uniform.
+
+    `confidence_threshold` is the auto-accept bar for an LLM-proposed match
+    -- a finance-ops reviewer would tune this (stricter to force more human
+    review, looser to auto-clear more volume) rather than it being a fixed
+    constant, so it's a parameter here, not a hardcoded value.
     """
     matches = list(rule_result["matches"])
     exceptions = list(rule_result["exceptions"])
@@ -160,7 +184,7 @@ def apply_llm_resolutions(rule_result: dict, llm_resolve_fn) -> dict:
         candidates = list(unmatched_bank.values())
         verdict = llm_resolve_fn(case, candidates) if llm_resolve_fn else None
 
-        if verdict and verdict.get("bank_line_id") in unmatched_bank and verdict.get("confidence", 0) >= 0.6:
+        if verdict and verdict.get("bank_line_id") in unmatched_bank and verdict.get("confidence", 0) >= confidence_threshold:
             bank_hit = unmatched_bank.pop(verdict["bank_line_id"])
             matches.append({
                 "order_id": case["order_id"], "settlement_id": case["settlement_id"],

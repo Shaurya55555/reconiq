@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import data_gen, llm_resolver, matcher
+from app import data_gen, llm_resolver, matcher, scoring
 
 
 def run_pipeline(n_orders=120, seed=42):
@@ -90,3 +90,26 @@ def test_deterministic_given_same_seed():
     _, _, final_b = run_pipeline(seed=7)
     assert len(final_a["matches"]) == len(final_b["matches"])
     assert len(final_a["exceptions"]) == len(final_b["exceptions"])
+
+
+def test_ground_truth_accuracy_is_high_and_misclassifications_are_explained():
+    batch, _, final = run_pipeline(n_orders=200, seed=99)
+    result = scoring.score_against_ground_truth(batch["orders"], final)
+    assert result["total"] == 200
+    assert result["ground_truth_accuracy"] >= 0.90
+    for row in result["misclassified"]:
+        assert row["expected_outcome"] != row["actual_outcome"] or row["actual_exception_type"] is not None
+
+
+def test_duplicate_payment_id_across_orders_is_an_explicit_exception_not_a_silent_drop():
+    orders = [
+        {"order_id": "ORD_A", "customer": "X", "amount": 100.0,
+         "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_shared"},
+        {"order_id": "ORD_B", "customer": "Y", "amount": 200.0,
+         "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_shared"},
+    ]
+    result = matcher.reconcile(orders, [], [])
+    exception_order_ids = {e["order_id"] for e in result["exceptions"]}
+    assert "ORD_B" in exception_order_ids
+    dup_exceptions = [e for e in result["exceptions"] if e["order_id"] == "ORD_B"]
+    assert any(e["type"] == "duplicate_order_reference" for e in dup_exceptions)
