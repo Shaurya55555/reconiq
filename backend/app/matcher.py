@@ -16,7 +16,7 @@ reason code, never silently dropped.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 FEE_TOLERANCE_PCT = 0.03
@@ -213,6 +213,7 @@ def apply_llm_resolutions(rule_result: dict, llm_resolve_fn,
     for bank_line_id, bl in unmatched_bank.items():
         exceptions.append({
             "type": "unrecognized_bank_line", "bank_line_id": bank_line_id,
+            "amount": bl["amount"],
             "reason": f"Bank line for amount {bl['amount']} on {bl['value_date']} does not "
                       "correspond to any order in this batch.",
         })
@@ -225,16 +226,97 @@ def apply_llm_resolutions(rule_result: dict, llm_resolve_fn,
     return {"matches": matches, "exceptions": exceptions, "audit_trail": audit}
 
 
+VALID_OVERRIDE_ACTIONS = {"accept_match", "reject_match", "manual_match"}
+
+
+def apply_override(matches: list[dict], exceptions: list[dict], audit_trail: list[dict],
+                    action: str, order_id: str, bank_line_id: str | None = None,
+                    reviewer_note: str | None = None) -> dict[str, Any]:
+    """A human reviewer's decision, folded into the same matches/exceptions/
+    audit_trail shape the automated passes produce -- but tagged
+    method="human_override" so the audit trail always shows what a person
+    changed versus what the system decided. Pure function over the arrays
+    the client already holds (from /api/run); nothing is stored server-side,
+    keeping the whole API stateless.
+    """
+    if action not in VALID_OVERRIDE_ACTIONS:
+        raise ValueError(f"Unknown override action: {action!r}. Must be one of {VALID_OVERRIDE_ACTIONS}.")
+
+    matches = [dict(m) for m in matches]
+    exceptions = [dict(e) for e in exceptions]
+    audit_trail = list(audit_trail)
+    note = (reviewer_note or "").strip()
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    def log_override(decision: str, confidence: float, override_note: str, **ids):
+        audit_trail.append({
+            "step": "human_review", "decision": decision, "method": "human_override",
+            "confidence": confidence, "note": override_note, "timestamp": timestamp, **ids,
+        })
+
+    if action == "accept_match":
+        match = next((m for m in matches if m["order_id"] == order_id), None)
+        if match is None:
+            raise ValueError(f"No existing match for order_id {order_id!r} to accept.")
+        match["confidence"] = 1.0
+        match["note"] = f"Human-reviewed and accepted.{(' ' + note) if note else ''}"
+        log_override("matched", 1.0, match["note"], order_id=order_id)
+
+    elif action == "reject_match":
+        match = next((m for m in matches if m["order_id"] == order_id), None)
+        if match is None:
+            raise ValueError(f"No existing match for order_id {order_id!r} to reject.")
+        matches.remove(match)
+        reason = note or "Reviewer rejected the automated match; needs manual investigation."
+        exceptions.append({"type": "human_rejected_match", "order_id": order_id, "reason": reason})
+        log_override("exception", 0.0, reason, order_id=order_id)
+
+    elif action == "manual_match":
+        if not bank_line_id:
+            raise ValueError("manual_match requires bank_line_id.")
+        exceptions = [e for e in exceptions
+                      if e.get("order_id") != order_id and e.get("bank_line_id") != bank_line_id]
+        matches = [m for m in matches
+                   if m["order_id"] != order_id and m.get("bank_line_id") != bank_line_id]
+        reason = note or "Manually matched by reviewer."
+        matches.append({
+            "order_id": order_id, "settlement_id": None, "bank_line_id": bank_line_id,
+            "method": "human_override", "confidence": 1.0, "note": reason,
+        })
+        log_override("matched", 1.0, reason, order_id=order_id, bank_line_id=bank_line_id)
+
+    return {"matches": matches, "exceptions": exceptions, "audit_trail": audit_trail}
+
+
 def summarize(orders: list[dict], result: dict) -> dict:
     total = len(orders)
     matched = len(result["matches"])
     by_method = {}
     for m in result["matches"]:
         by_method[m["method"]] = by_method.get(m["method"], 0) + 1
+
+    amount_by_order_id = {o["order_id"]: o["amount"] for o in orders}
+
+    total_amount_matched = round(
+        sum(amount_by_order_id.get(m["order_id"], 0.0) for m in result["matches"]), 2)
+
+    # One order can carry more than one exception (e.g. a duplicate
+    # settlement flagged alongside the order's own primary outcome) -- sum
+    # each order's amount once, not once per exception, so this can't
+    # overstate exposure. Exceptions with no order_id (an orphan bank line)
+    # carry their own "amount" and are added on top, since they're real
+    # money movements not attributable to any order.
+    excepted_order_ids = {e["order_id"] for e in result["exceptions"] if e.get("order_id")}
+    total_amount_at_risk = round(
+        sum(amount_by_order_id.get(oid, 0.0) for oid in excepted_order_ids)
+        + sum(e.get("amount", 0.0) for e in result["exceptions"] if not e.get("order_id")), 2)
+
     return {
         "total_orders": total,
         "matched": matched,
         "match_rate": round(matched / total, 4) if total else 0.0,
         "by_method": by_method,
         "exception_count": len(result["exceptions"]),
+        "total_amount_matched": total_amount_matched,
+        "total_amount_at_risk": total_amount_at_risk,
     }

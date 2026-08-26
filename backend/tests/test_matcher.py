@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import data_gen, llm_resolver, matcher, scoring
@@ -83,6 +85,81 @@ def test_summary_match_rate_is_consistent_with_matches():
     summary = matcher.summarize(batch["orders"], final)
     assert summary["matched"] == len(final["matches"])
     assert summary["match_rate"] == round(summary["matched"] / summary["total_orders"], 4)
+
+
+def test_amount_at_risk_counts_each_order_once_even_with_multiple_exceptions():
+    orders = [
+        {"order_id": "ORD_A", "customer": "X", "amount": 500.0,
+         "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"},
+        {"order_id": "ORD_B", "customer": "Y", "amount": 300.0,
+         "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_2"},
+    ]
+    result = {
+        "matches": [],
+        "exceptions": [
+            {"type": "amount_mismatch", "order_id": "ORD_A"},
+            {"type": "duplicate_candidate", "order_id": "ORD_A"},  # same order, second exception
+            {"type": "no_settlement_found", "order_id": "ORD_B"},
+            {"type": "unrecognized_bank_line", "amount": 150.0},  # no order_id, orphan money
+        ],
+    }
+    summary = matcher.summarize(orders, result)
+    assert summary["total_amount_at_risk"] == 500.0 + 300.0 + 150.0
+    assert summary["total_amount_matched"] == 0.0
+
+
+def test_amount_matched_sums_only_matched_orders():
+    batch, _, final = run_pipeline(n_orders=50, seed=3)
+    summary = matcher.summarize(batch["orders"], final)
+    amount_by_id = {o["order_id"]: o["amount"] for o in batch["orders"]}
+    expected = round(sum(amount_by_id[m["order_id"]] for m in final["matches"]), 2)
+    assert summary["total_amount_matched"] == expected
+
+
+def test_override_accept_match_bumps_confidence_and_logs_human_override():
+    matches = [{"order_id": "ORD1", "settlement_id": "s1", "bank_line_id": "b1",
+                "method": "fuzzy", "confidence": 0.9, "note": "auto"}]
+    result = matcher.apply_override(matches, [], [], "accept_match", "ORD1",
+                                     reviewer_note="looks right")
+    assert result["matches"][0]["confidence"] == 1.0
+    assert "looks right" in result["matches"][0]["note"]
+    assert result["audit_trail"][-1]["method"] == "human_override"
+    assert result["audit_trail"][-1]["decision"] == "matched"
+
+
+def test_override_reject_match_moves_it_to_exceptions():
+    matches = [{"order_id": "ORD1", "settlement_id": "s1", "bank_line_id": "b1",
+                "method": "llm", "confidence": 0.65, "note": "shaky guess"}]
+    result = matcher.apply_override(matches, [], [], "reject_match", "ORD1",
+                                     reviewer_note="wrong customer")
+    assert result["matches"] == []
+    assert result["exceptions"][0]["type"] == "human_rejected_match"
+    assert result["exceptions"][0]["order_id"] == "ORD1"
+    assert "wrong customer" in result["exceptions"][0]["reason"]
+
+
+def test_override_manual_match_clears_prior_exceptions_for_both_sides():
+    exceptions = [
+        {"type": "no_settlement_found", "order_id": "ORD1", "reason": "..."},
+        {"type": "unrecognized_bank_line", "bank_line_id": "b_orphan", "amount": 100.0, "reason": "..."},
+    ]
+    result = matcher.apply_override([], exceptions, [], "manual_match", "ORD1",
+                                     bank_line_id="b_orphan", reviewer_note="confirmed via bank portal")
+    assert result["exceptions"] == []
+    assert len(result["matches"]) == 1
+    assert result["matches"][0] == {
+        "order_id": "ORD1", "settlement_id": None, "bank_line_id": "b_orphan",
+        "method": "human_override", "confidence": 1.0, "note": "confirmed via bank portal",
+    }
+
+
+def test_override_rejects_unknown_action_and_missing_target():
+    with pytest.raises(ValueError):
+        matcher.apply_override([], [], [], "delete_everything", "ORD1")
+    with pytest.raises(ValueError):
+        matcher.apply_override([], [], [], "accept_match", "ORD_NOT_FOUND")
+    with pytest.raises(ValueError):
+        matcher.apply_override([], [], [], "manual_match", "ORD1")  # missing bank_line_id
 
 
 def test_deterministic_given_same_seed():

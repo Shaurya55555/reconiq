@@ -34,7 +34,12 @@
   .tag.exact { background: #123a35; color: var(--good); }
   .tag.fuzzy { background: #3a3312; color: var(--warn); }
   .tag.llm { background: #1a2b4a; color: #7aa2f7; }
+  .tag.human_override { background: #2a1a3a; color: #c792ea; }
   .tag.exception { background: #3a1414; color: var(--bad); }
+  select.manual-match-select { font-size: 12px; padding: 4px 6px; margin-right: 6px; }
+  .accept-btn, .reject-btn, .manual-match-btn { font-size: 12px; padding: 5px 10px; margin-right: 4px; }
+  .reject-btn { color: var(--bad); border-color: var(--bad); }
+  .accept-btn { color: var(--good); border-color: var(--good); }
   #chat-log { max-height: 220px; overflow-y: auto; margin-bottom: 10px; }
   #chat-log .msg { padding: 8px 12px; border-radius: 8px; margin-bottom: 8px; font-size: 13px; }
   #chat-log .q { background: #16202a; }
@@ -73,6 +78,11 @@
     <div class="card"><div class="label">Matched</div><div class="value" id="c-matched">--</div></div>
     <div class="card"><div class="label">Exceptions</div><div class="value" id="c-exceptions">--</div></div>
     <div class="card"><div class="label">Throughput</div><div class="value" id="c-throughput">--</div></div>
+  </div>
+
+  <div class="cards" id="amount-cards" style="display:none">
+    <div class="card"><div class="label">Amount reconciled</div><div class="value good" id="c-amount-matched">--</div></div>
+    <div class="card"><div class="label">Amount at risk</div><div class="value" id="c-amount-at-risk">--</div></div>
   </div>
   <p id="accuracy-note" style="display:none; color:var(--muted); font-size:12px; margin:-16px 0 20px">
     Ground-truth accuracy is scored against the known-correct label seeded into each synthetic order
@@ -133,9 +143,10 @@ let currentRun = null; // {run_id, summary, matches, exceptions, audit_trail}
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const pct = (x) => (x * 100).toFixed(1) + "%";
+const rupees = (x) => "₹" + Number(x).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 const tagFor = (method) => `<span class="tag ${esc(method)}">${esc(method)}</span>`;
 
-const METHOD_COLORS = { exact: "#6fcf97", fuzzy: "#f2c94c", llm: "#7aa2f7" };
+const METHOD_COLORS = { exact: "#6fcf97", fuzzy: "#f2c94c", llm: "#7aa2f7", human_override: "#c792ea" };
 const EXCEPTION_COLOR = "#f47174";
 
 async function runReconciliation() {
@@ -151,24 +162,50 @@ async function runReconciliation() {
     });
     if (!res.ok) throw new Error(`API returned ${res.status}`);
     currentRun = await res.json();
-
-    renderSummary(currentRun.summary);
-    renderMethodChart(currentRun.matches);
-    renderExceptionChart(currentRun.exceptions);
-    renderExceptions(currentRun.exceptions);
-    renderMatches(currentRun.matches);
-    renderAudit(currentRun.audit_trail);
-
-    renderMisclassified(currentRun.ground_truth);
-
+    renderAll();
     $("status").textContent = `Run ${currentRun.run_id} complete.`;
-    const sections = ["cards", "charts-section", "exceptions-section", "matches-section", "audit-section", "chat-section"];
-    if (currentRun.ground_truth && currentRun.ground_truth.misclassified.length) sections.push("misclassified-section");
-    sections.forEach((id) => $(id).style.display = "");
   } catch (e) {
     $("status").textContent = "Error: " + e.message;
   } finally {
     $("run-btn").disabled = false;
+  }
+}
+
+function renderAll() {
+  renderSummary(currentRun.summary);
+  renderMethodChart(currentRun.matches);
+  renderExceptionChart(currentRun.exceptions);
+  renderExceptions(currentRun.exceptions);
+  renderMatches(currentRun.matches);
+  renderAudit(currentRun.audit_trail);
+  renderMisclassified(currentRun.ground_truth);
+
+  const sections = ["cards", "charts-section", "exceptions-section", "matches-section", "audit-section", "chat-section"];
+  if (currentRun.ground_truth && currentRun.ground_truth.misclassified.length) sections.push("misclassified-section");
+  sections.forEach((id) => $(id).style.display = "");
+}
+
+async function submitOverride(action, orderId, bankLineId, reviewerNote) {
+  $("status").textContent = "Applying override...";
+  try {
+    const res = await fetch(`${API}/api/override`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        orders: currentRun.orders, matches: currentRun.matches,
+        exceptions: currentRun.exceptions, audit_trail: currentRun.audit_trail,
+        action, order_id: orderId, bank_line_id: bankLineId, reviewer_note: reviewerNote,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `API returned ${res.status}`);
+    }
+    const updated = await res.json();
+    currentRun = { ...currentRun, ...updated };
+    renderAll();
+    $("status").textContent = `Override applied to ${orderId}.`;
+  } catch (e) {
+    $("status").textContent = "Override failed: " + e.message;
   }
 }
 
@@ -183,8 +220,17 @@ function renderSummary(s) {
   $("c-matched").textContent = `${s.matched} / ${s.total_orders}`;
   $("c-exceptions").textContent = s.exception_count;
   $("c-exceptions").className = "value " + (s.exception_count === 0 ? "good" : "warn");
-  $("c-throughput").textContent = `${s.throughput_records_per_sec} rec/s`;
+  if (typeof s.throughput_records_per_sec === "number") {
+    $("c-throughput").textContent = `${s.throughput_records_per_sec} rec/s`;
+  } // else: an override response has no timing data -- leave the last real measurement showing
   $("provider-badge").textContent = "LLM layer: " + s.llm_provider;
+
+  if (typeof s.total_amount_at_risk === "number") {
+    $("c-amount-matched").textContent = rupees(s.total_amount_matched);
+    $("c-amount-at-risk").textContent = rupees(s.total_amount_at_risk);
+    $("c-amount-at-risk").className = "value " + (s.total_amount_at_risk === 0 ? "good" : "bad");
+    $("amount-cards").style.display = "";
+  }
 }
 
 function barChart(containerId, entries, colorFor) {
@@ -200,7 +246,7 @@ function barChart(containerId, entries, colorFor) {
 function renderMethodChart(matches) {
   const counts = {};
   matches.forEach(m => counts[m.method] = (counts[m.method] || 0) + 1);
-  const entries = ["exact", "fuzzy", "llm"].filter(k => counts[k]).map(k => [k, counts[k]]);
+  const entries = ["exact", "fuzzy", "llm", "human_override"].filter(k => counts[k]).map(k => [k, counts[k]]);
   barChart("chart-methods", entries, (label) => METHOD_COLORS[label] || "#888");
 }
 
@@ -216,14 +262,26 @@ function renderExceptions(exceptions) {
     $("exceptions-table").innerHTML = '<div class="empty">No exceptions in this run.</div>';
     return;
   }
-  let rows = exceptions.map(e => `
+  const orphanBankLines = exceptions.filter(e => e.type === "unrecognized_bank_line" && e.bank_line_id);
+
+  let rows = exceptions.map(e => {
+    const reviewCell = (e.order_id && orphanBankLines.length)
+      ? `<select class="secondary manual-match-select" data-order-id="${esc(e.order_id)}">
+           <option value="">-- pick unclaimed bank line --</option>
+           ${orphanBankLines.map(b => `<option value="${esc(b.bank_line_id)}">${rupees(b.amount)} (${esc(b.bank_line_id)})</option>`).join("")}
+         </select>
+         <button class="secondary manual-match-btn" data-order-id="${esc(e.order_id)}">Manually match</button>`
+      : "";
+    return `
     <tr>
       <td><span class="tag exception">${esc(e.type)}</span></td>
       <td>${esc(e.order_id ?? e.bank_line_id ?? "-")}</td>
       <td>${esc(e.reason)}</td>
-    </tr>`).join("");
+      <td>${reviewCell}</td>
+    </tr>`;
+  }).join("");
   $("exceptions-table").innerHTML = `
-    <table><thead><tr><th>Type</th><th>Entity</th><th>Reason</th></tr></thead>
+    <table><thead><tr><th>Type</th><th>Entity</th><th>Reason</th><th>Review</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
 }
 
@@ -231,13 +289,19 @@ function renderMatches(matches) {
   const byMethod = {};
   matches.forEach(m => { (byMethod[m.method] = byMethod[m.method] || []).push(m); });
   let html = "";
-  for (const method of ["exact", "fuzzy", "llm"]) {
+  for (const method of ["exact", "fuzzy", "llm", "human_override"]) {
     const list = byMethod[method] || [];
     if (!list.length) continue;
-    const rows = list.slice(0, 8).map(m => `
-      <tr><td>${tagFor(m.method)}</td><td>${esc(m.order_id)}</td><td>${m.confidence}</td><td>${esc(m.note)}</td></tr>`).join("");
+    const rows = list.slice(0, 8).map(m => {
+      const shaky = m.confidence < 0.95 && m.method !== "human_override";
+      const reviewCell = shaky
+        ? `<button class="secondary accept-btn" data-order-id="${esc(m.order_id)}">Accept</button>
+           <button class="secondary reject-btn" data-order-id="${esc(m.order_id)}">Reject</button>`
+        : "";
+      return `<tr><td>${tagFor(m.method)}</td><td>${esc(m.order_id)}</td><td>${m.confidence}</td><td>${esc(m.note)}</td><td>${reviewCell}</td></tr>`;
+    }).join("");
     html += `<h3 style="font-size:13px;color:var(--muted);margin:14px 0 6px">${esc(method)} (${list.length})</h3>
-      <table><thead><tr><th>Method</th><th>Order</th><th>Confidence</th><th>Note</th></tr></thead>
+      <table><thead><tr><th>Method</th><th>Order</th><th>Confidence</th><th>Note</th><th>Review</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
   }
   $("matches-table").innerHTML = html || '<div class="empty">No matches.</div>';
@@ -307,6 +371,25 @@ $("export-exceptions-btn").addEventListener("click", () => {
 $("export-audit-btn").addEventListener("click", () => {
   if (!currentRun) return;
   downloadCsv("reconiq_audit_trail.csv", currentRun.audit_trail, ["step", "decision", "method", "confidence", "order_id", "bank_line_id", "note"]);
+});
+
+// Event delegation for override controls, since the tables re-render on
+// every run/override -- binding once here avoids losing listeners.
+$("matches-table").addEventListener("click", (e) => {
+  const acceptBtn = e.target.closest(".accept-btn");
+  if (acceptBtn) { submitOverride("accept_match", acceptBtn.dataset.orderId, null, "Accepted after manual review"); return; }
+  const rejectBtn = e.target.closest(".reject-btn");
+  if (rejectBtn) { submitOverride("reject_match", rejectBtn.dataset.orderId, null, "Rejected after manual review"); return; }
+});
+
+$("exceptions-table").addEventListener("click", (e) => {
+  const btn = e.target.closest(".manual-match-btn");
+  if (!btn) return;
+  const orderId = btn.dataset.orderId;
+  const select = $("exceptions-table").querySelector(`select.manual-match-select[data-order-id="${CSS.escape(orderId)}"]`);
+  const bankLineId = select ? select.value : "";
+  if (!bankLineId) { $("status").textContent = "Pick a bank line before manually matching."; return; }
+  submitOverride("manual_match", orderId, bankLineId, "Manually matched by reviewer after checking bank portal");
 });
 </script>
 </body>
