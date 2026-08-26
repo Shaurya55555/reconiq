@@ -1,0 +1,84 @@
+bank_line_id,confidence,method,note,order_id,settlement_id
+bl_7946905675,1.0,exact,UTR + amount matched exactly,ORD1002,stl_4423720279
+bl_5578531558,1.0,exact,UTR + amount matched exactly,ORD1004,stl_8334413227
+bl_8515312385,1.0,exact,UTR + amount matched exactly,ORD1005,stl_5539784435
+bl_4245863187,0.9,fuzzy,"UTR matched; amount differs by 1.6%, within fee tolerance",ORD1006,stl_1844054145
+bl_9925784862,1.0,exact,UTR + amount matched exactly,ORD1008,stl_6655612876
+bl_8165326342,1.0,exact,UTR + amount matched exactly,ORD1013,stl_6607934866
+bl_8179651689,0.9,fuzzy,"UTR matched; amount differs by 2.2%, within fee tolerance",ORD1014,stl_6371682491
+bl_8251352029,1.0,exact,UTR + amount matched exactly,ORD1015,stl_4620140258
+bl_9316908230,1.0,exact,UTR + amount matched exactly,ORD1016,stl_3969650282
+bl_1971704548,1.0,exact,UTR + amount matched exactly,ORD1017,stl_3946163882
+bl_6802929604,1.0,exact,UTR + amount matched exactly,ORD1018,stl_7079482301
+bl_4721165022,1.0,exact,UTR + amount matched exactly,ORD1019,stl_8970835344
+bl_7607316151,1.0,exact,UTR + amount matched exactly,ORD1020,stl_5849704205
+bl_5910399254,1.0,exact,UTR + amount matched exactly,ORD1023,stl_9287330713
+bl_2175908867,1.0,exact,UTR + amount matched exactly,ORD1024,stl_5351675019
+bl_5836272098,1.0,exact,UTR + amount matched exactly,ORD1025,stl_6554201278
+bl_4936652013,1.0,exact,UTR + amount matched exactly,ORD1026,stl_1156460994
+bl_7338167952,0.9,fuzzy,"UTR matched; amount differs by 2.6%, within fee tolerance",ORD1027,stl_8907895495
+bl_2335522921,1.0,exact,UTR + amount matched exactly,ORD1028,stl_7795121912
+bl_6282892493,1.0,exact,UTR + amount matched exactly,ORD1029,stl_9883793280
+bl_8306805167,1.0,exact,UTR + amount matched exactly,ORD1030,stl_9582781247
+bl_9878676364,1.0,exact,UTR + amount matched exactly,ORD1032,stl_4444801754
+bl_1576955318,1.0,exact,UTR + amount matched exactly,ORD1033,stl_8483283108
+bl_9432311674,1.0,exact,UTR + amount matched exactly,ORD1036,stl_7281971816
+bl_8151390077,1.0,exact,UTR + amount matched exactly,ORD1037,stl_1498550247
+bl_2624094166,1.0,exact,UTR + amount matched exactly,ORD1038,stl_8713939499
+bl_4178963114,1.0,exact,UTR + amount matched exactly,ORD1039,stl_3462126327
+bl_7128865413,1.0,exact,UTR + amount matched exactly,ORD1040,stl_2496871691
+bl_5600727998,1.0,exact,UTR + amount matched exactly,ORD1041,stl_3806167364
+bl_3886157956,1.0,exact,UTR + amount matched exactly,ORD1042,stl_8517772796
+bl_3468403959,1.0,exact,UTR + amount matched exactly,ORD1044,stl_4070072555
+bl_2033082070,1.0,exact,UTR + amount matched exactly,ORD1045,stl_8378446275
+bl_2761661605,1.0,exact,UTR + amount matched exactly,ORD1046,stl_5556388472
+bl_2728112407,1.0,exact,UTR + amount matched exactly,ORD1048,stl_3750898871
+bl_3861731698,1.0,exact,UTR + amount matched exactly,ORD1051,stl_8725826326
+bl_8306498428,1.0,exact,UTR + amount matched exactly,ORD1054,stl_4126822911
+bl_8197921027,1.0,exact,UTR + amount matched exactly,ORD1055,stl_6422791415
+bl_1071397696,1.0,exact,UTR + amount matched exactly,ORD1056,stl_8844645718
+bl_4046997278,1.0,exact,UTR + amount matched exactly,ORD1057,stl_5704264924
+bl_6031669003,1.0,exact,UTR + amount matched exactly,ORD1058,stl_7855742179
+bl_1004655101,1.0,exact,UTR + amount matched exactly,ORD1059,stl_3944192246
+bl_6332451957,1.0,exact,UTR + amount matched exactly,ORD1060,stl_6158927537
+bl_1162109303,1.0,exact,UTR + amount matched exactly,ORD1061,stl_7399986638
+bl_1043302416,1.0,exact,UTR + amount matched exactly,ORD1062,stl_4437565792
+bl_7500825702,1.0,exact,UTR + amount matched exactly,ORD1063,stl_7915933246
+bl_5357072697,1.0,exact,UTR + amount matched exactly,ORD1065,stl_7069239526
+bl_3219168961,0.9,fuzzy,"UTR matched; amount differs by 2.4%, within fee tolerance",ORD1066,stl_6191521975
+bl_4885800095,0.9,fuzzy,"UTR matched; amount differs by 2.0%, within fee tolerance",ORD1069,stl_7122015111
+bl_2863281722,1.0,exact,UTR + amount matched exactly,ORD1070,stl_3419683111
+bl_2441975192,1.0,exact,UTR + amount matched exactly,ORD1072,stl_1479323293
+bl_1276842655,1.0,exact,UTR + amount matched exactly,ORD1073,stl_5738736093
+bl_2608083855,1.0,exact,UTR + amount matched exactly,ORD1074,stl_2611394132
+bl_7346059385,1.0,exact,UTR + amount matched exactly,ORD1077,stl_1315146110
+bl_1070471292,1.0,exact,UTR + amount matched exactly,ORD1078,stl_4289561302
+bl_9564905531,1.0,exact,UTR + amount matched exactly,ORD1081,stl_5175086677
+bl_8550727834,1.0,exact,UTR + amount matched exactly,ORD1082,stl_4303982310
+bl_7010494956,1.0,exact,UTR + amount matched exactly,ORD1085,stl_2218235065
+bl_3149839210,1.0,exact,UTR + amount matched exactly,ORD1087,stl_8700424215
+bl_9373700683,1.0,exact,UTR + amount matched exactly,ORD1088,stl_7571582016
+bl_7664611830,1.0,exact,UTR + amount matched exactly,ORD1089,stl_2669644795
+bl_1181292127,1.0,exact,UTR + amount matched exactly,ORD1090,stl_7729477006
+bl_9054070450,1.0,exact,UTR + amount matched exactly,ORD1092,stl_8310086110
+bl_5336401115,1.0,exact,UTR + amount matched exactly,ORD1093,stl_3410414964
+bl_3989897659,1.0,exact,UTR + amount matched exactly,ORD1094,stl_3478408196
+bl_8535516804,1.0,exact,UTR + amount matched exactly,ORD1095,stl_5812612101
+bl_9346839080,0.9,fuzzy,"UTR matched; amount differs by 2.0%, within fee tolerance",ORD1096,stl_3817458971
+bl_1844722993,1.0,exact,UTR + amount matched exactly,ORD1097,stl_2695159276
+bl_7713838055,1.0,exact,UTR + amount matched exactly,ORD1098,stl_7158352916
+bl_6408234412,0.9,fuzzy,"UTR matched; amount differs by 1.9%, within fee tolerance",ORD1099,stl_1463105714
+bl_8009539250,1.0,exact,UTR + amount matched exactly,ORD1100,stl_2444874539
+bl_6353989544,0.9,llm,Amount matched exactly (6608.49) and the narration's digit sequence is 100% similar to the expected UTR UTR131144123 once punctuation is stripped.,ORD1001,stl_1673671309
+bl_5452298729,0.9,llm,Amount matched exactly (20540.48) and the narration's digit sequence is 100% similar to the expected UTR UTR369395330 once punctuation is stripped.,ORD1007,stl_8719029809
+bl_1641003887,0.9,llm,Amount matched exactly (21008.2) and the narration's digit sequence is 100% similar to the expected UTR UTR544338439 once punctuation is stripped.,ORD1011,stl_6020047383
+bl_3316806779,0.79,llm,Amount matched exactly (3809.18) and the narration's digit sequence is 71% similar to the expected UTR UTR242789451 once punctuation is stripped.,ORD1021,stl_5299036698
+bl_3666649976,0.86,llm,Amount matched exactly (2557.51) and the narration's digit sequence is 89% similar to the expected UTR UTR501792259 once punctuation is stripped.,ORD1034,stl_2265830982
+bl_1669883523,0.9,llm,Amount matched exactly (12205.29) and the narration's digit sequence is 100% similar to the expected UTR UTR838427556 once punctuation is stripped.,ORD1043,stl_8188975290
+bl_3932564279,0.79,llm,Amount matched exactly (1120.76) and the narration's digit sequence is 71% similar to the expected UTR UTR627379256 once punctuation is stripped.,ORD1047,stl_9313923758
+bl_8612421344,0.9,llm,Amount matched exactly (15738.95) and the narration's digit sequence is 100% similar to the expected UTR UTR340489753 once punctuation is stripped.,ORD1050,stl_5890750244
+bl_3549302979,0.9,llm,Amount matched exactly (12058.73) and the narration's digit sequence is 100% similar to the expected UTR UTR843895196 once punctuation is stripped.,ORD1064,stl_3305188431
+bl_9919248484,0.79,llm,Amount matched exactly (8307.15) and the narration's digit sequence is 71% similar to the expected UTR UTR328393796 once punctuation is stripped.,ORD1068,stl_3672216497
+bl_8066000014,0.9,llm,Amount matched exactly (14983.67) and the narration's digit sequence is 100% similar to the expected UTR UTR247862703 once punctuation is stripped.,ORD1071,stl_2367716423
+bl_8841249061,0.9,llm,Amount matched exactly (4251.26) and the narration's digit sequence is 100% similar to the expected UTR UTR809761374 once punctuation is stripped.,ORD1080,stl_1925980414
+bl_2016001630,0.9,llm,Amount matched exactly (2124.5) and the narration's digit sequence is 100% similar to the expected UTR UTR311022063 once punctuation is stripped.,ORD1083,stl_2967590844

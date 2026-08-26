@@ -1,0 +1,31 @@
+bank_line_id,order_id,reason,settlement_id,type
+,ORD1003,"Settlement amount 3935.83 differs from order amount 3565.35 by 10.4%, outside plausible Razorpay fee range.",stl_3687490721,amount_mismatch
+,ORD1009,"Settlement amount 16422.6 differs from order amount 18111.04 by 9.3%, outside plausible Razorpay fee range.",stl_7846007039,amount_mismatch
+,ORD1010,Order has a Razorpay payment_id but no matching settlement record exists in this batch.,,no_settlement_found
+,ORD1012,"Settlement amount 11740.37 differs from order amount 10688.95 by 9.8%, outside plausible Razorpay fee range.",stl_7313949079,amount_mismatch
+,ORD1016,More than one settlement row references this payment_id; only one was matched to a bank line.,stl_8431811377,duplicate_candidate
+,ORD1022,"Settlement amount 18954.77 differs from order amount 15846.57 by 19.6%, outside plausible Razorpay fee range.",stl_6926112272,amount_mismatch
+,ORD1025,More than one settlement row references this payment_id; only one was matched to a bank line.,stl_1507574924,duplicate_candidate
+,ORD1031,Order has a Razorpay payment_id but no matching settlement record exists in this batch.,,no_settlement_found
+,ORD1035,"Settlement amount 2089.31 differs from order amount 1859.7 by 12.3%, outside plausible Razorpay fee range.",stl_2670328349,amount_mismatch
+,ORD1048,More than one settlement row references this payment_id; only one was matched to a bank line.,stl_1835359115,duplicate_candidate
+,ORD1049,"Settlement amount 5176.39 differs from order amount 6071.96 by 14.7%, outside plausible Razorpay fee range.",stl_6830907390,amount_mismatch
+,ORD1052,Order has a Razorpay payment_id but no matching settlement record exists in this batch.,,no_settlement_found
+,ORD1053,Order has a Razorpay payment_id but no matching settlement record exists in this batch.,,no_settlement_found
+,ORD1067,"Settlement amount 3568.73 differs from order amount 3289.34 by 8.5%, outside plausible Razorpay fee range.",stl_4863480144,amount_mismatch
+,ORD1075,Order has a Razorpay payment_id but no matching settlement record exists in this batch.,,no_settlement_found
+,ORD1076,"Settlement amount 19924.91 differs from order amount 17894.06 by 11.3%, outside plausible Razorpay fee range.",stl_4388729449,amount_mismatch
+,ORD1079,"Settlement amount 12399.88 differs from order amount 14188.55 by 12.6%, outside plausible Razorpay fee range.",stl_8245891015,amount_mismatch
+,ORD1084,Order has a Razorpay payment_id but no matching settlement record exists in this batch.,,no_settlement_found
+,ORD1086,"Settlement amount 9993.27 differs from order amount 9405.84 by 6.2%, outside plausible Razorpay fee range.",stl_9644182740,amount_mismatch
+,ORD1091,Order has a Razorpay payment_id but no matching settlement record exists in this batch.,,no_settlement_found
+bl_3472529647,,Bank line for amount 19924.91 on 2026-08-02 does not correspond to any order in this batch.,,unrecognized_bank_line
+bl_6940899671,,Bank line for amount 3935.83 on 2026-08-02 does not correspond to any order in this batch.,,unrecognized_bank_line
+bl_8594017334,,Bank line for amount 5176.39 on 2026-08-12 does not correspond to any order in this batch.,,unrecognized_bank_line
+bl_2654654160,,Bank line for amount 9993.27 on 2026-08-17 does not correspond to any order in this batch.,,unrecognized_bank_line
+bl_4873461239,,Bank line for amount 11740.37 on 2026-08-07 does not correspond to any order in this batch.,,unrecognized_bank_line
+bl_4924514645,,Bank line for amount 18954.77 on 2026-08-21 does not correspond to any order in this batch.,,unrecognized_bank_line
+bl_9670213011,,Bank line for amount 2089.31 on 2026-08-09 does not correspond to any order in this batch.,,unrecognized_bank_line
+bl_7930057781,,Bank line for amount 3568.73 on 2026-08-13 does not correspond to any order in this batch.,,unrecognized_bank_line
+bl_3181040849,,Bank line for amount 12399.88 on 2026-08-15 does not correspond to any order in this batch.,,unrecognized_bank_line
+bl_8843879504,,Bank line for amount 16422.6 on 2026-08-12 does not correspond to any order in this batch.,,unrecognized_bank_line

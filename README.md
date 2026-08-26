@@ -3,6 +3,8 @@
 A multi-source reconciliation agent for the Razorpay AI Buildathon —
 **Track 04: AI Finance Controller**.
 
+**Live demo:** _add-your-vercel-url-here_ · **Repo:** https://github.com/Shaurya55555/reconiq
+
 ## What it solves
 
 Merchants reconcile money across three places that never agree perfectly:
@@ -22,14 +24,57 @@ ReconIQ closes that loop automatically on a batch of orders:
    digits transposed. This is handed to an LLM (or an offline heuristic
    with no key configured) to reason over the free-text narration, amount,
    and date and propose a match — the one step a plain rules engine
-   genuinely cannot do.
+   genuinely cannot do. The auto-accept confidence bar is a tunable
+   parameter (`confidence_threshold`), not a hardcoded cutoff, because in
+   production a finance-ops reviewer would want to set how conservative
+   the auto-clearing is.
 4. **Honest exceptions** — anything still unresolved is surfaced with a
    reason code (`no_settlement_found`, `amount_mismatch`,
-   `duplicate_candidate`, `unrecognized_narration`,
-   `unrecognized_bank_line`), never silently dropped.
+   `duplicate_candidate`, `duplicate_order_reference`,
+   `unrecognized_narration`, `unrecognized_bank_line`), never silently
+   dropped.
 
 Every decision, at every stage, is written to an audit trail: which
-record, which method decided it, at what confidence, and why.
+record, which method decided it, at what confidence, and why. The
+dashboard can export both the exception list and the audit trail as CSV,
+so the "honest exception list" claim is independently checkable, not just
+asserted on screen.
+
+## Two numbers, and why they're both reported
+
+- **Match rate** — how much of the batch got auto-resolved. Tells you
+  volume.
+- **Ground-truth accuracy** — every synthetic order is seeded with a
+  known-correct label (`clean`, `fee_adjusted`, `missing_settlement`, …)
+  that the matcher never sees; `backend/app/scoring.py` grades the
+  matcher's actual output against that label. Tells you correctness.
+
+A high match rate with low ground-truth accuracy would mean the matcher
+is confidently wrong — the failure mode "one cherry-picked match proves
+nothing" is warning about. Reporting only match rate would hide that;
+ReconIQ reports both.
+
+**Honesty check on that accuracy number:** the fee-tolerance and
+date-drift thresholds in `matcher.py` and the anomaly ranges in
+`data_gen.py` were authored by the same person, together — so a
+consistently high ground-truth score here demonstrates the *pipeline is
+internally consistent* (its thresholds correctly separate the anomaly
+classes they were designed against), not that it's zero-error against
+arbitrary real-world noise. A real merchant integration would need those
+thresholds tuned against that merchant's actual fee schedule and
+settlement timing, not the constants shipped here.
+
+## Sample run (100 synthetic orders, offline heuristic, no LLM key)
+
+```
+match_rate:            0.83   (63 exact, 7 fuzzy, 13 LLM/heuristic-resolved)
+ground_truth_accuracy: 1.00
+exception_count:       30     (10 amount_mismatch, 10 unrecognized_bank_line,
+                                7 no_settlement_found, 3 duplicate_candidate)
+throughput:             ~19,000 records/sec (in-process, no I/O)
+```
+
+Reproduce with `POST /api/run {"n_orders": 100, "seed": 5}`.
 
 ## Why this design (not just a rules engine with a chatbot bolted on)
 
@@ -41,10 +86,18 @@ narrating what a SQL join already found. See `backend/app/matcher.py`
 for the pass order and `backend/app/llm_resolver.py` for the resolver
 and its offline fallback.
 
+**Being honest about the offline fallback's limits:** with no
+`LLM_PROVIDER` configured, both the exception-resolver and the "ask about
+this run" chat run on deterministic heuristics (digit-similarity scoring;
+keyword-matched question answering), not a model. That's a legitimate
+fallback — the app is fully functional and the reasoning is real, just
+weaker — but it should never be presented as "the LLM reasoning" in a
+demo unless a provider key is actually configured.
+
 ## Architecture
 
 ```
-data_gen.py  --generates-->  orders.csv, settlements.csv, bank_lines.csv
+data_gen.py  --generates-->  orders, settlements, bank_lines (in-memory batch)
                                         |
                                         v
 matcher.py   --pass 1/2 (rules)-->  matches, needs_llm, exceptions
@@ -53,7 +106,12 @@ matcher.py   --pass 1/2 (rules)-->  matches, needs_llm, exceptions
 llm_resolver.py --pass 3 (LLM/heuristic)--> resolved matches or final exceptions
                                         |
                                         v
-FastAPI (main.py) --serves--> summary, exceptions, audit trail, chat Q&A
+scoring.py   --grades matches/exceptions against each order's seeded truth-->
+                                  ground_truth_accuracy, misclassified rows
+                                        |
+                                        v
+FastAPI (main.py) --stateless response--> summary, matches, exceptions,
+                                          audit trail, ground truth, chat Q&A
                                         |
                                         v
 frontend/index.html (static dashboard, no build step)
@@ -64,7 +122,18 @@ frontend/index.html (static dashboard, no build step)
 runs a deterministic offline heuristic (amount match + digit-sequence
 similarity) so the whole app works with zero API keys.
 
+The API is deliberately **stateless**: `POST /api/run` returns the full
+result (summary, matches, exceptions, audit trail, ground truth) in one
+response, and `POST /api/ask` takes the run's summary/exceptions back in
+the request body rather than looking them up server-side by ID. This is
+what lets the identical code run unmodified on a long-lived `uvicorn`
+process locally and on a cold-starting serverless function on Vercel —
+there's no shared memory to lose between invocations because nothing
+depends on it.
+
 ## Running it
+
+**Locally:**
 
 ```bash
 cd backend
@@ -78,7 +147,13 @@ copy `backend/.env.example` to `backend/.env` and set `LLM_PROVIDER` +
 an API key to use a real model for the exception-resolution and Q&A
 layers instead of the offline heuristic.
 
-Tests:
+**With Docker:**
+
+```bash
+docker compose up --build
+```
+
+**Tests:**
 
 ```bash
 cd backend
@@ -102,8 +177,33 @@ size. Left the failing test in `backend/tests/test_matcher.py` as
 that would have caught this in a real batch before a human noticed a
 mismatched exception silently marked "matched."
 
+A second, subtler one surfaced during review, not by a test failing: the
+matcher grouped orders by `razorpay_payment_id` and only ever reconciled
+`orders_for_payment[0]` — if two orders had ever shared a payment_id
+(impossible in this synthetic generator's random ID space, but not
+impossible in general), every order after the first would vanish from
+both `matches` and `exceptions` with no trace. Exactly the silent-drop
+failure mode this whole project exists to prevent, sitting live in the
+code that was supposed to prevent it. Fixed by explicitly emitting a
+`duplicate_order_reference` exception for every order past the first in
+such a group, and added
+`test_duplicate_payment_id_across_orders_is_an_explicit_exception_not_a_silent_drop`
+to keep it caught.
+
 ## Stack
 
-Python / FastAPI backend, no database (in-memory run store — swaps for
-Postgres with no interface change), static HTML/JS dashboard (no build
-step, so nothing to break on someone else's machine during judging).
+Python / FastAPI backend, no database (in-memory run store for local
+convenience — the API itself doesn't depend on it, see Architecture
+above), static HTML/JS dashboard (no build step, so nothing to break on
+someone else's machine during judging), deployed to Vercel as a Python
+serverless function.
+
+## Configuration reference
+
+| Setting | Where | Default | Notes |
+|---|---|---|---|
+| `LLM_PROVIDER` | env | unset (offline heuristic) | `openai` \| `anthropic` \| `gemini` \| `ollama` |
+| `LLM_MODEL` | env | provider-specific | override the specific model used |
+| `LLM_CONFIDENCE_THRESHOLD` | env, or `confidence_threshold` in the `/api/run` request | `0.6` | auto-accept bar for an LLM-proposed match |
+| `FEE_TOLERANCE_PCT` | constant in `matcher.py` | `0.03` | would be per-merchant configurable in production, not a hardcoded constant, since real fee schedules vary by payment method and merchant category |
+| `DATE_DRIFT_OK_DAYS` | constant in `matcher.py` | `3` | same — real settlement SLAs vary by bank and settlement cycle |

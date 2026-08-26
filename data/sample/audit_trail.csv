@@ -1,0 +1,127 @@
+bank_line_id,confidence,decision,method,note,order_id,step
+,0.0,deferred_to_llm,rule,settlement UTR not found verbatim in any bank line,ORD1001,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1002,match
+,1.0,exception,rule,amount diff exceeds fee tolerance,ORD1003,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1004,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1005,match
+,0.9,matched,fuzzy,"UTR matched; amount differs by 1.6%, within fee tolerance",ORD1006,match
+,0.0,deferred_to_llm,rule,settlement UTR not found verbatim in any bank line,ORD1007,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1008,match
+,1.0,exception,rule,amount diff exceeds fee tolerance,ORD1009,match
+,1.0,exception,rule,no settlement row for this payment_id,ORD1010,settlement_lookup
+,0.0,deferred_to_llm,rule,settlement UTR not found verbatim in any bank line,ORD1011,match
+,1.0,exception,rule,amount diff exceeds fee tolerance,ORD1012,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1013,match
+,0.9,matched,fuzzy,"UTR matched; amount differs by 2.2%, within fee tolerance",ORD1014,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1015,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1016,match
+,0.8,exception,rule,unresolved duplicate settlement,ORD1016,dedupe
+,1.0,matched,exact,UTR + amount matched exactly,ORD1017,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1018,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1019,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1020,match
+,0.0,deferred_to_llm,rule,settlement UTR not found verbatim in any bank line,ORD1021,match
+,1.0,exception,rule,amount diff exceeds fee tolerance,ORD1022,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1023,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1024,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1025,match
+,0.8,exception,rule,unresolved duplicate settlement,ORD1025,dedupe
+,1.0,matched,exact,UTR + amount matched exactly,ORD1026,match
+,0.9,matched,fuzzy,"UTR matched; amount differs by 2.6%, within fee tolerance",ORD1027,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1028,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1029,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1030,match
+,1.0,exception,rule,no settlement row for this payment_id,ORD1031,settlement_lookup
+,1.0,matched,exact,UTR + amount matched exactly,ORD1032,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1033,match
+,0.0,deferred_to_llm,rule,settlement UTR not found verbatim in any bank line,ORD1034,match
+,1.0,exception,rule,amount diff exceeds fee tolerance,ORD1035,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1036,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1037,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1038,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1039,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1040,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1041,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1042,match
+,0.0,deferred_to_llm,rule,settlement UTR not found verbatim in any bank line,ORD1043,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1044,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1045,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1046,match
+,0.0,deferred_to_llm,rule,settlement UTR not found verbatim in any bank line,ORD1047,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1048,match
+,0.8,exception,rule,unresolved duplicate settlement,ORD1048,dedupe
+,1.0,exception,rule,amount diff exceeds fee tolerance,ORD1049,match
+,0.0,deferred_to_llm,rule,settlement UTR not found verbatim in any bank line,ORD1050,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1051,match
+,1.0,exception,rule,no settlement row for this payment_id,ORD1052,settlement_lookup
+,1.0,exception,rule,no settlement row for this payment_id,ORD1053,settlement_lookup
+,1.0,matched,exact,UTR + amount matched exactly,ORD1054,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1055,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1056,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1057,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1058,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1059,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1060,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1061,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1062,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1063,match
+,0.0,deferred_to_llm,rule,settlement UTR not found verbatim in any bank line,ORD1064,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1065,match
+,0.9,matched,fuzzy,"UTR matched; amount differs by 2.4%, within fee tolerance",ORD1066,match
+,1.0,exception,rule,amount diff exceeds fee tolerance,ORD1067,match
+,0.0,deferred_to_llm,rule,settlement UTR not found verbatim in any bank line,ORD1068,match
+,0.9,matched,fuzzy,"UTR matched; amount differs by 2.0%, within fee tolerance",ORD1069,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1070,match
+,0.0,deferred_to_llm,rule,settlement UTR not found verbatim in any bank line,ORD1071,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1072,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1073,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1074,match
+,1.0,exception,rule,no settlement row for this payment_id,ORD1075,settlement_lookup
+,1.0,exception,rule,amount diff exceeds fee tolerance,ORD1076,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1077,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1078,match
+,1.0,exception,rule,amount diff exceeds fee tolerance,ORD1079,match
+,0.0,deferred_to_llm,rule,settlement UTR not found verbatim in any bank line,ORD1080,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1081,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1082,match
+,0.0,deferred_to_llm,rule,settlement UTR not found verbatim in any bank line,ORD1083,match
+,1.0,exception,rule,no settlement row for this payment_id,ORD1084,settlement_lookup
+,1.0,matched,exact,UTR + amount matched exactly,ORD1085,match
+,1.0,exception,rule,amount diff exceeds fee tolerance,ORD1086,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1087,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1088,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1089,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1090,match
+,1.0,exception,rule,no settlement row for this payment_id,ORD1091,settlement_lookup
+,1.0,matched,exact,UTR + amount matched exactly,ORD1092,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1093,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1094,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1095,match
+,0.9,matched,fuzzy,"UTR matched; amount differs by 2.0%, within fee tolerance",ORD1096,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1097,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1098,match
+,0.9,matched,fuzzy,"UTR matched; amount differs by 1.9%, within fee tolerance",ORD1099,match
+,1.0,matched,exact,UTR + amount matched exactly,ORD1100,match
+,0.9,matched,llm,Amount matched exactly (6608.49) and the narration's digit sequence is 100% similar to the expected UTR UTR131144123 once punctuation is stripped.,ORD1001,llm_resolve
+,0.9,matched,llm,Amount matched exactly (20540.48) and the narration's digit sequence is 100% similar to the expected UTR UTR369395330 once punctuation is stripped.,ORD1007,llm_resolve
+,0.9,matched,llm,Amount matched exactly (21008.2) and the narration's digit sequence is 100% similar to the expected UTR UTR544338439 once punctuation is stripped.,ORD1011,llm_resolve
+,0.79,matched,llm,Amount matched exactly (3809.18) and the narration's digit sequence is 71% similar to the expected UTR UTR242789451 once punctuation is stripped.,ORD1021,llm_resolve
+,0.86,matched,llm,Amount matched exactly (2557.51) and the narration's digit sequence is 89% similar to the expected UTR UTR501792259 once punctuation is stripped.,ORD1034,llm_resolve
+,0.9,matched,llm,Amount matched exactly (12205.29) and the narration's digit sequence is 100% similar to the expected UTR UTR838427556 once punctuation is stripped.,ORD1043,llm_resolve
+,0.79,matched,llm,Amount matched exactly (1120.76) and the narration's digit sequence is 71% similar to the expected UTR UTR627379256 once punctuation is stripped.,ORD1047,llm_resolve
+,0.9,matched,llm,Amount matched exactly (15738.95) and the narration's digit sequence is 100% similar to the expected UTR UTR340489753 once punctuation is stripped.,ORD1050,llm_resolve
+,0.9,matched,llm,Amount matched exactly (12058.73) and the narration's digit sequence is 100% similar to the expected UTR UTR843895196 once punctuation is stripped.,ORD1064,llm_resolve
+,0.79,matched,llm,Amount matched exactly (8307.15) and the narration's digit sequence is 71% similar to the expected UTR UTR328393796 once punctuation is stripped.,ORD1068,llm_resolve
+,0.9,matched,llm,Amount matched exactly (14983.67) and the narration's digit sequence is 100% similar to the expected UTR UTR247862703 once punctuation is stripped.,ORD1071,llm_resolve
+,0.9,matched,llm,Amount matched exactly (4251.26) and the narration's digit sequence is 100% similar to the expected UTR UTR809761374 once punctuation is stripped.,ORD1080,llm_resolve
+,0.9,matched,llm,Amount matched exactly (2124.5) and the narration's digit sequence is 100% similar to the expected UTR UTR311022063 once punctuation is stripped.,ORD1083,llm_resolve
+bl_3472529647,1.0,exception,rule,bank line unclaimed after all passes,,bank_line_sweep
+bl_6940899671,1.0,exception,rule,bank line unclaimed after all passes,,bank_line_sweep
+bl_8594017334,1.0,exception,rule,bank line unclaimed after all passes,,bank_line_sweep
+bl_2654654160,1.0,exception,rule,bank line unclaimed after all passes,,bank_line_sweep
+bl_4873461239,1.0,exception,rule,bank line unclaimed after all passes,,bank_line_sweep
+bl_4924514645,1.0,exception,rule,bank line unclaimed after all passes,,bank_line_sweep
+bl_9670213011,1.0,exception,rule,bank line unclaimed after all passes,,bank_line_sweep
+bl_7930057781,1.0,exception,rule,bank line unclaimed after all passes,,bank_line_sweep
+bl_3181040849,1.0,exception,rule,bank line unclaimed after all passes,,bank_line_sweep
+bl_8843879504,1.0,exception,rule,bank line unclaimed after all passes,,bank_line_sweep

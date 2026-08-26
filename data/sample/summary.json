@@ -1,0 +1,12 @@
+{
+  "total_orders": 100,
+  "matched": 83,
+  "match_rate": 0.83,
+  "by_method": {
+    "exact": 63,
+    "fuzzy": 7,
+    "llm": 13
+  },
+  "exception_count": 30,
+  "ground_truth_accuracy": 1.0
+}
