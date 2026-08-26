@@ -222,7 +222,7 @@
     <div class="card big"><div class="label">Amount processed</div><div class="value" id="c-amount-processed">--</div></div>
     <div class="card big"><div class="label">Amount reconciled</div><div class="value good" id="c-amount-matched">--</div></div>
     <div class="card big"><div class="label">Amount at risk</div><div class="value" id="c-amount-at-risk">--</div></div>
-    <div class="card big" id="value-accuracy-card" style="display:none"><div class="label">Value accuracy</div><div class="value" id="c-amount-accuracy">--</div></div>
+    <div class="card big" id="value-accuracy-card" style="display:none"><div class="label" title="Order-level correctness, weighted by rupee amount -- not a claim that money was physically verified moving">Value-weighted accuracy</div><div class="value" id="c-amount-accuracy">--</div></div>
   </div>
 
   <div class="cards-group-label">Reconciliation quality</div>
@@ -244,7 +244,9 @@
     <div class="card"><div class="label">Safe-miss amount</div><div class="value warn" id="c-safe-miss">--</div></div>
   </div>
   <p id="money-weighted-note" style="display:none; color:var(--muted); font-size:12px; margin:-8px 0 20px">
-    Transaction-count accuracy treats every order equally; value accuracy weights by rupee value.
+    Transaction-count accuracy treats every order equally; value-weighted accuracy weights order-level
+    correctness by rupee amount instead (it measures decision correctness, not that money was physically
+    verified moving).
     False-clear = confidently wrong (matched when it should have been an exception, the dangerous
     failure). Safe-miss = conservative (flagged as an exception when it should have matched, money
     just sits reviewable instead of moving wrong).
@@ -856,7 +858,7 @@ function renderBenchmark(data) {
   lineChart("benchmark-chart", [
     { label: "Ground-truth accuracy", color: "#6fcf97", points: data.results.map(r => r.ground_truth_accuracy), xLabels },
     { label: "Match rate", color: "#7aa2f7", points: data.results.map(r => r.match_rate), xLabels },
-    { label: "Amount accuracy", color: "#f2c94c", points: data.results.map(r => r.amount_accuracy), xLabels },
+    { label: "Value-weighted accuracy", color: "#f2c94c", points: data.results.map(r => r.amount_accuracy), xLabels },
   ]);
 
   const rows = data.results.map(r => `
@@ -870,7 +872,7 @@ function renderBenchmark(data) {
     </tr>`).join("");
   $("benchmark-table").innerHTML = `
     <table><thead><tr><th>Corruption</th><th>Match rate</th><th>Ground-truth acc.</th>
-    <th>Amount acc.</th><th>Exceptions</th><th>False-clear ₹</th></tr></thead>
+    <th>Value-weighted acc.</th><th>Exceptions</th><th>False-clear ₹</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
 }
 

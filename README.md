@@ -47,12 +47,15 @@ ReconIQ closes that loop automatically on a batch of orders:
    no seeded truth label to score against — but match rate, amount at
    risk, and the exception list are still reported.
 
-## Money-weighted accuracy, and the two ways to be wrong
+## Value-weighted accuracy, and the two ways to be wrong
 
 Transaction-count accuracy ("96% correct") treats a ₹200 order and a
-₹2,00,000 order identically. `scoring.py` also reports **amount
-accuracy** (rupee-weighted) and splits the wrong 4% into two failure
-modes that are not equally bad:
+₹2,00,000 order identically. `scoring.py` also reports **value-weighted
+accuracy** (`amount_accuracy` in the API) and splits the wrong 4% into
+two failure modes that are not equally bad. A precision note on the
+name: this is order-level decision correctness weighted by rupee amount
+— it is not a claim that money was physically verified moving correctly,
+which is a stronger statement than what's actually measured here.
 
 - **False clear** — confidently wrong: matched when it should have been
   an exception. The dangerous failure — money moves that shouldn't have.
