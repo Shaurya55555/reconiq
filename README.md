@@ -5,6 +5,8 @@ A multi-source reconciliation agent for the Razorpay AI Buildathon —
 
 **Live demo:** https://reconiq-mocha.vercel.app · **Repo:** https://github.com/Shaurya55555/reconiq
 
+![Dashboard summary: ground-truth accuracy, match rate, amount reconciled/at-risk, money-weighted accuracy](docs/images/dashboard-summary.jpg)
+
 ## What it solves
 
 Merchants reconcile money across three places that never agree perfectly:
@@ -80,6 +82,8 @@ match rate             82.9%        91.4%
 ground-truth accuracy  91.4%       100.0%
 amount at risk        ₹3,57,802   ₹1,56,903
 ```
+
+![Matches-by-method and exceptions-by-reason charts, with a ground-truth misclassification row](docs/images/matches-exceptions-charts.jpg)
 
 The AI layer only ever touches what the rules alone left as an
 exception — it doesn't get a chance to make a clean rule-based decision
@@ -195,6 +199,17 @@ you get from the hosted demo are genuine model calls, verified against
 the live API, not the heuristic. The heuristic path stays as a real,
 tested fallback for offline/no-key use, and both are covered above.
 
+## Per-decision evidence
+
+Every match or exception has a "Why?" drill-down showing the full
+lineage — order, settlement, and bank-line amounts, UTR vs. narration,
+date drift, whether AI was involved, and the actual reasoning. Below: a
+real case where Gemini correctly *declined* to guess on a garbled
+narration rather than propose a low-confidence match — an honest
+`unrecognized_narration` exception instead of a wrong clear.
+
+![Evidence drawer showing an unrecognized_narration exception where the LLM declined to guess](docs/images/evidence-drawer.jpg)
+
 ## Architecture
 
 ```
@@ -308,3 +323,39 @@ serverless function.
 | `LLM_CONFIDENCE_THRESHOLD` | env, or `confidence_threshold` in the `/api/run` request | `0.6` | auto-accept bar for an LLM-proposed match |
 | `FEE_TOLERANCE_PCT` | constant in `matcher.py` | `0.03` | would be per-merchant configurable in production, not a hardcoded constant, since real fee schedules vary by payment method and merchant category |
 | `DATE_DRIFT_OK_DAYS` | constant in `matcher.py` | `3` | same — real settlement SLAs vary by bank and settlement cycle |
+
+## Roadmap — what's deliberately not built, and why
+
+**Deepening the existing loop (the direction this would grow in):**
+
+- **Empirical confidence-threshold calibration.** `LLM_CONFIDENCE_THRESHOLD`
+  (default `0.6`) is a reasonable starting point, not an empirically
+  justified one. The right next step is a threshold sweep (0.5 → 0.9)
+  against the hidden ground truth, reporting coverage vs. false-clear
+  rate at each point, to pick a value that's actually defensible rather
+  than asserted. Not built yet — flagged rather than faked.
+- **Multi-seed corruption benchmark.** The current benchmark runs one
+  batch per corruption level; averaging several seeds per level (with a
+  spread, not just a mean) would make the "not cherry-picked" claim
+  statistically tighter.
+- **Parallelizing LLM resolution calls.** The 1,000-order scale test
+  above found the real ceiling: ~65 sequential Gemini calls take long
+  enough to exceed Vercel's serverless duration cap. Batching those
+  calls concurrently (or moving large batches to a background job
+  instead of the request/response cycle) would raise that ceiling
+  without changing the matching logic itself.
+- **Per-merchant persisted policy.** `fee_tolerance_pct` /
+  `date_drift_ok_days` are request-level parameters today; a real
+  deployment would persist these per merchant (real fee schedules and
+  settlement SLAs vary by payment method and bank), not re-supply them
+  on every call.
+
+**Explicitly out of scope — deliberately not built, not a gap:**
+
+Cash-position/cash-forecasting, reconciliation aging as a standalone
+view, a general-purpose finance chatbot, payroll, invoicing, tax
+workflows, expense management, or any other accounting product. Track 4
+asks for one finance-ops loop done credibly — throughput, measured
+accuracy, honest exceptions — not a broader finance suite. Every one of
+those would dilute that story rather than strengthen it; rejected on
+purpose, not for lack of time.
