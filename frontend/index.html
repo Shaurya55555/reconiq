@@ -73,6 +73,7 @@
   .tag.fuzzy { background: #3a3312; color: var(--warn); }
   .tag.llm { background: #1a2b4a; color: #7aa2f7; }
   .tag.human_override { background: #2a1a3a; color: #c792ea; }
+  .tag.group_split { background: #123449; color: #56c8e0; }
   .tag.exception { background: #3a1414; color: var(--bad); }
   select.manual-match-select { font-size: 12px; padding: 4px 6px; margin-right: 6px; }
   .accept-btn, .reject-btn, .manual-match-btn { font-size: 12px; padding: 5px 10px; margin-right: 4px; }
@@ -342,7 +343,7 @@ const pct = (x) => (x * 100).toFixed(1) + "%";
 const rupees = (x) => "₹" + Number(x).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 const tagFor = (method) => `<span class="tag ${esc(method)}">${esc(method)}</span>`;
 
-const METHOD_COLORS = { exact: "#6fcf97", fuzzy: "#f2c94c", llm: "#7aa2f7", human_override: "#c792ea" };
+const METHOD_COLORS = { exact: "#6fcf97", fuzzy: "#f2c94c", group_split: "#56c8e0", llm: "#7aa2f7", human_override: "#c792ea" };
 const EXCEPTION_COLOR = "#f47174";
 
 function setStatus(text, loading) {
@@ -543,20 +544,33 @@ function showEvidence(orderId, bankLineId) {
     ? findSettlementById(match.settlement_id)
     : (exceptionsFor.find(e => e.settlement_id) ? findSettlementById(exceptionsFor.find(e => e.settlement_id).settlement_id)
        : (order ? findSettlementsByPaymentId(order.razorpay_payment_id)[0] : null));
-  const bankLine = match ? findBankLineById(match.bank_line_id) : (bankLineId ? findBankLineById(bankLineId) : null);
+
+  const bankLineIds = match ? (match.bank_line_ids && match.bank_line_ids.length ? match.bank_line_ids : [match.bank_line_id])
+    : (bankLineId ? [bankLineId] : []);
+  const bankLinesFound = bankLineIds.map(findBankLineById).filter(Boolean);
+  const isGroup = bankLinesFound.length > 1;
 
   $("evidence-title").textContent = orderId || bankLineId || "Evidence";
 
   const verdictHtml = match
-    ? `<div class="evidence-verdict matched">✅ MATCHED &mdash; ${esc(match.method)}, confidence ${match.confidence}</div>`
+    ? `<div class="evidence-verdict matched">✅ MATCHED &mdash; ${esc(match.method)}, confidence ${match.confidence}${isGroup ? ` (${bankLinesFound.length} bank lines)` : ""}</div>`
     : `<div class="evidence-verdict exception">⛔ ${exceptionsFor.length ? esc(exceptionsFor.map(e => e.type).join(", ")) : "NO RECORD"}</div>`;
 
   const rows = [];
   if (order) rows.push(["Order amount", rupees(order.amount)]);
   if (settlement) rows.push(["Settlement amount", rupees(settlement.amount)]);
-  if (bankLine) rows.push(["Bank amount", rupees(bankLine.amount)]);
+  if (isGroup) {
+    const total = bankLinesFound.reduce((sum, b) => sum + b.amount, 0);
+    rows.push(["Bank amount (combined)", `${rupees(total)} = ${bankLinesFound.map(b => rupees(b.amount)).join(" + ")}`]);
+  } else if (bankLinesFound[0]) {
+    rows.push(["Bank amount", rupees(bankLinesFound[0].amount)]);
+  }
   if (settlement) rows.push(["Settlement UTR", esc(settlement.utr)]);
-  if (bankLine) rows.push(["Bank narration", esc(bankLine.narration)]);
+  if (isGroup) {
+    rows.push(["Bank narrations", bankLinesFound.map(b => `${esc(b.line_id)}: ${esc(b.narration)} (${b.value_date})`).join("<br>")]);
+  } else if (bankLinesFound[0]) {
+    rows.push(["Bank narration", esc(bankLinesFound[0].narration)]);
+  }
   if (order && settlement) {
     const drift = daysBetween(order.created_at, settlement.settled_at);
     if (drift !== null) rows.push(["Date drift", `${drift} day(s)`]);
@@ -642,7 +656,7 @@ function barChart(containerId, entries, colorFor) {
 function renderMethodChart(matches) {
   const counts = {};
   matches.forEach(m => counts[m.method] = (counts[m.method] || 0) + 1);
-  const entries = ["exact", "fuzzy", "llm", "human_override"].filter(k => counts[k]).map(k => [k, counts[k]]);
+  const entries = ["exact", "fuzzy", "group_split", "llm", "human_override"].filter(k => counts[k]).map(k => [k, counts[k]]);
   barChart("chart-methods", entries, (label) => METHOD_COLORS[label] || "#888");
 }
 
@@ -687,7 +701,7 @@ function renderMatches(matches) {
   const byMethod = {};
   matches.forEach(m => { (byMethod[m.method] = byMethod[m.method] || []).push(m); });
   let html = "";
-  for (const method of ["exact", "fuzzy", "llm", "human_override"]) {
+  for (const method of ["exact", "fuzzy", "group_split", "llm", "human_override"]) {
     const list = byMethod[method] || [];
     if (!list.length) continue;
     const rows = list.slice(0, 8).map(m => {

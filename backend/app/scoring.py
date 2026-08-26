@@ -22,6 +22,7 @@ EXPECTED_OUTCOME = {
     "date_shifted": "matched",
     "garbled_narration": "matched",
     "duplicate_settlement": "matched",
+    "split_settlement": "matched",
     "missing_settlement": "exception",
     "amount_mismatch": "exception",
 }

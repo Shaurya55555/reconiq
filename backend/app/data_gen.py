@@ -26,16 +26,18 @@ CUSTOMERS = [
 Anomaly = Literal[
     "clean", "fee_adjusted", "date_shifted", "missing_settlement",
     "duplicate_settlement", "garbled_narration", "amount_mismatch",
+    "split_settlement",
 ]
 
 ANOMALY_WEIGHTS = {
-    "clean": 0.55,
-    "fee_adjusted": 0.12,
-    "date_shifted": 0.08,
-    "missing_settlement": 0.08,
+    "clean": 0.50,
+    "fee_adjusted": 0.11,
+    "date_shifted": 0.07,
+    "missing_settlement": 0.07,
     "duplicate_settlement": 0.05,
-    "garbled_narration": 0.08,
+    "garbled_narration": 0.07,
     "amount_mismatch": 0.04,
+    "split_settlement": 0.09,
 }
 
 
@@ -149,13 +151,32 @@ def generate_batch(n_orders: int = 70, seed: int | None = None,
         else:
             narration = f"NEFT-{utr}-RAZORPAY SETTLEMENT {customer.split()[0].upper()}"
 
-        bank_lines.append({
-            "line_id": f"bl_{rng.randint(10**9, 10**10 - 1)}",
-            "narration": narration,
-            "amount": net_amount,
-            "value_date": settled_at.date().isoformat(),
-            "_utr_hint": utr,
-        })
+        if anomaly == "split_settlement":
+            # One settlement, real money, but the bank shows it arriving as
+            # two separate credits (a partial early payout followed by the
+            # balance a day or two later, or a fee adjustment booked as its
+            # own line) -- both legs reference the same UTR, because it's
+            # genuinely the same underlying settlement. A single 1:1 pass
+            # can never resolve this; it needs a many-to-one match.
+            split_pct = rng.uniform(0.35, 0.65)
+            leg_1 = round(net_amount * split_pct, 2)
+            leg_2 = round(net_amount - leg_1, 2)
+            for leg_amount, day_offset in ((leg_1, 0), (leg_2, rng.randint(1, 2))):
+                bank_lines.append({
+                    "line_id": f"bl_{rng.randint(10**9, 10**10 - 1)}",
+                    "narration": f"NEFT-{utr}-RAZORPAY SETTLEMENT {customer.split()[0].upper()} PART",
+                    "amount": leg_amount,
+                    "value_date": (settled_at + timedelta(days=day_offset)).date().isoformat(),
+                    "_utr_hint": utr,
+                })
+        else:
+            bank_lines.append({
+                "line_id": f"bl_{rng.randint(10**9, 10**10 - 1)}",
+                "narration": narration,
+                "amount": net_amount,
+                "value_date": settled_at.date().isoformat(),
+                "_utr_hint": utr,
+            })
 
     rng.shuffle(bank_lines)
     return {"orders": orders, "settlements": settlements, "bank_lines": bank_lines}

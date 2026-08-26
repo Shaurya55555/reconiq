@@ -21,7 +21,16 @@ ReconIQ closes that loop automatically on a batch of orders:
    matches to the paisa.
 2. **Fuzzy match** — UTR found, but amount differs by a plausible Razorpay
    fee (≤3%) or the settlement date drifted.
-3. **LLM-resolved match** — the UTR isn't found in *any* bank line because
+3. **Many-to-one (split settlement) match** — the money for one settlement
+   didn't arrive as a single bank credit; it arrived as two or three
+   separate lines (a partial early payout, the balance a day or two later,
+   or a fee leg booked on its own) that all reference the same UTR.
+   Deterministic, bounded combinatorial search over the UTR-matching
+   candidates, no AI involved — the shared UTR is what proves the group
+   belongs together, not a guess. This is the single most common reason
+   commercial reconciliation tools still fail and get pushed back to
+   spreadsheets: they handle 1:1 well and give up past that.
+4. **LLM-resolved match** — the UTR isn't found in *any* bank line because
    the narration was truncated, prefixed with bank-specific noise, or had
    digits transposed. This is handed to an LLM (or an offline heuristic
    with no key configured) to reason over the free-text narration, amount,
@@ -30,22 +39,49 @@ ReconIQ closes that loop automatically on a batch of orders:
    parameter (`confidence_threshold`), not a hardcoded cutoff, because in
    production a finance-ops reviewer would want to set how conservative
    the auto-clearing is.
-4. **Honest exceptions** — anything still unresolved is surfaced with a
+5. **Honest exceptions** — anything still unresolved is surfaced with a
    reason code (`no_settlement_found`, `amount_mismatch`,
    `duplicate_candidate`, `duplicate_order_reference`,
    `unrecognized_narration`, `unrecognized_bank_line`), never silently
    dropped.
-5. **Human-in-the-loop override** — a reviewer can accept a shaky match,
+6. **Human-in-the-loop override** — a reviewer can accept a shaky match,
    reject one back to an exception, or manually pair an exception with an
    unclaimed bank line via `POST /api/override`, logged distinctly as
    `human_override` in the audit trail so it's never confused with an
    automated decision.
-6. **Bring your own data** — the same pipeline runs against uploaded
+7. **Bring your own data** — the same pipeline runs against uploaded
    `orders.csv` / `settlements.csv` / `bank_lines.csv` (`POST
    /api/run-upload`, or the dashboard's "Bring your own data" panel).
    Ground-truth accuracy is honestly omitted for uploaded data — there's
    no seeded truth label to score against — but match rate, amount at
    risk, and the exception list are still reported.
+
+## Many-to-one matching, in more depth
+
+Every reconciliation tool handles the case where one order maps cleanly
+to one settlement and one bank line. Almost none of them handle it well
+when that assumption breaks — and in practice it breaks constantly:
+partial early settlements, a fee adjustment booked as its own ledger
+line, a payout split across two bank working days. That's routinely why
+finance teams fall back to spreadsheets even with expensive tools in
+place.
+
+`matcher._find_settlement_match` tries a single bank line first (exact,
+then fuzzy). Only if that fails does it search combinations of up to
+`MAX_GROUP_SIZE` (3) bank lines that already reference the *same
+settlement UTR*, looking for a subset that sums to the settlement amount
+within a paisa. This is deliberately a classical combinatorial search,
+not an LLM call: subset-sum is a problem a bounded search solves exactly
+and quickly, and handing exact arithmetic to a language model would be
+slower and less reliable for no benefit. The UTR match is what proves
+the group belongs together — the LLM is reserved for the genuinely
+ambiguous case (narration text with no UTR match at all), consistent
+with the same "rules first, AI only where rules truly can't" principle
+used everywhere else in this project.
+
+Verified: at seed 99 / 200 orders, every `split_settlement`-seeded order
+resolves via `group_split` with zero misclassifications, entirely in the
+rules pass — the AI layer never needs to see these cases.
 
 ## Value-weighted accuracy, and the two ways to be wrong
 
@@ -352,6 +388,14 @@ serverless function.
   deployment would persist these per merchant (real fee schedules and
   settlement SLAs vary by payment method and bank), not re-supply them
   on every call.
+- **Bulk multi-order credits (the reverse many-to-many case).** Split
+  settlements (one settlement → many bank lines, same UTR) are now
+  handled. The mirror case — one bulk bank credit covering several
+  *different* orders' settlements, batched together by the gateway with
+  a shared batch reference instead of individual UTRs — is a natural
+  extension of the same combinatorial-search pass, but needs a batch-
+  reference narration format this generator doesn't produce yet. Noted
+  as the next concrete step, not built.
 
 **Explicitly out of scope — deliberately not built, not a gap:**
 

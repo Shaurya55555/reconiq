@@ -259,3 +259,79 @@ def test_duplicate_payment_id_across_orders_is_an_explicit_exception_not_a_silen
     assert "ORD_B" in exception_order_ids
     dup_exceptions = [e for e in result["exceptions"] if e["order_id"] == "ORD_B"]
     assert any(e["type"] == "duplicate_order_reference" for e in dup_exceptions)
+
+
+# ---- many-to-one (split settlement) group matching ----
+
+def test_split_settlement_orders_are_resolved_via_group_split_deterministically():
+    """split_settlement is generated as one settlement whose money arrives
+    as two separate bank lines sharing its UTR. This must resolve without
+    any LLM at all -- the shared UTR makes it a rules problem, not a
+    reasoning problem."""
+    batch = data_gen.generate_batch(n_orders=200, seed=99)
+    split_order_ids = {o["order_id"] for o in batch["orders"] if o["_truth"] == "split_settlement"}
+    assert split_order_ids, "expected at least one split_settlement order at this seed"
+
+    rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"])
+    matched_by_rules = {m["order_id"]: m for m in rule_result["matches"]}
+
+    for order_id in split_order_ids:
+        assert order_id in matched_by_rules, f"{order_id} should resolve in the rule pass alone"
+        assert matched_by_rules[order_id]["method"] == "group_split"
+        assert len(matched_by_rules[order_id]["bank_line_ids"]) >= 2
+
+
+def test_group_split_match_bank_line_ids_sum_to_settlement_amount():
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
+                  "amount": 1000.0, "settled_at": "2026-08-02"}
+    bank_lines = [
+        {"line_id": "bl_a", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT PART",
+         "amount": 400.0, "value_date": "2026-08-02"},
+        {"line_id": "bl_b", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT PART",
+         "amount": 600.0, "value_date": "2026-08-03"},
+    ]
+    result = matcher.reconcile([order], [settlement], bank_lines)
+    assert len(result["matches"]) == 1
+    match = result["matches"][0]
+    assert match["method"] == "group_split"
+    assert set(match["bank_line_ids"]) == {"bl_a", "bl_b"}
+    assert not result["exceptions"]
+
+
+def test_group_split_does_not_rescue_a_genuine_amount_mismatch():
+    """A single bank line referencing the UTR with the wrong amount must
+    not be silently absorbed by the group-sum search reaching for other,
+    unrelated bank lines to make up the difference."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
+                  "amount": 1000.0, "settled_at": "2026-08-02"}
+    bank_lines = [
+        # references the right UTR but the amount is genuinely wrong (not a split leg)
+        {"line_id": "bl_wrong", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT",
+         "amount": 700.0, "value_date": "2026-08-02"},
+        # an unrelated bank line that happens to make the sum work -- must not be grabbed
+        {"line_id": "bl_unrelated", "narration": "NEFT-UTR999888777-RAZORPAY SETTLEMENT",
+         "amount": 300.0, "value_date": "2026-08-02"},
+    ]
+    result = matcher.reconcile([order], [settlement], bank_lines)
+    assert not result["matches"]
+    assert result["needs_llm"] or result["exceptions"], \
+        "a genuinely wrong single-line amount must surface, not vanish"
+
+
+def test_group_split_only_combines_lines_sharing_the_settlement_utr():
+    """Two bank lines that happen to sum to the settlement amount but do
+    NOT reference its UTR must never be combined into a false group match."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
+                  "amount": 1000.0, "settled_at": "2026-08-02"}
+    bank_lines = [
+        {"line_id": "bl_a", "narration": "NEFT-UTR111222333-OTHER", "amount": 400.0, "value_date": "2026-08-02"},
+        {"line_id": "bl_b", "narration": "NEFT-UTR444555666-OTHER", "amount": 600.0, "value_date": "2026-08-02"},
+    ]
+    result = matcher.reconcile([order], [settlement], bank_lines)
+    assert not result["matches"]

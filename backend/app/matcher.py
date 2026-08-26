@@ -1,30 +1,76 @@
 """Deterministic reconciliation engine.
 
-Three passes, cheapest and most certain first, so the LLM is only ever
+Four passes, cheapest and most certain first, so the LLM is only ever
 asked to resolve what the rules genuinely cannot:
 
-  1. exact   - settlement UTR found verbatim in a bank narration, amount
-               matches to the paisa.
+  1. exact   - settlement UTR found verbatim in a single bank narration,
+               amount matches to the paisa.
   2. fuzzy   - UTR found verbatim but amount differs by a plausible
                Razorpay fee (<=3%), or settlement date drifted.
-  3. llm     - no settlement's UTR appears in any remaining bank line
+  3. group   - no single bank line covers the settlement, but two or three
+               bank lines that all reference the same UTR sum to it exactly
+               (a partial early payout + balance, or a fee leg booked
+               separately). Many-to-one, still fully deterministic -- the
+               shared UTR is what ties the group together, not a guess.
+  4. llm     - no settlement's UTR appears in any remaining bank line at all
                (garbled/truncated narration) -> handed to the LLM resolver,
                which must reason over free text, not just string-match.
 
-Anything left after all three passes is an honest exception with a
+Anything left after all four passes is an honest exception with a
 reason code, never silently dropped.
 """
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from itertools import combinations
 from typing import Any
 
 FEE_TOLERANCE_PCT = 0.03
 DATE_DRIFT_OK_DAYS = 3
+MAX_GROUP_SIZE = 3
 
 
 def _parse_date(s: str) -> date:
     return datetime.fromisoformat(s).date() if "T" not in s else datetime.fromisoformat(s).date()
+
+
+def _find_settlement_match(stl: dict, order: dict, utr_matches: list[dict],
+                            fee_tolerance_pct: float, date_drift_ok_days: int) -> tuple | None:
+    """Try to resolve one settlement against the bank lines that already
+    reference its UTR (`utr_matches`). Returns (method, confidence, note,
+    bank_line_ids) or None if nothing deterministic fits -- in which case
+    the caller falls back to the LLM pass.
+    """
+    amount_diff_pct = abs(stl["amount"] - order["amount"]) / order["amount"]
+    date_drift = abs((_parse_date(stl["settled_at"]) - _parse_date(order["created_at"])).days)
+
+    single = next((b for b in utr_matches if b["amount"] == stl["amount"]), None)
+    if single:
+        if amount_diff_pct < 0.001:
+            if date_drift <= date_drift_ok_days:
+                return ("exact", 1.0, "UTR + amount matched exactly", [single["line_id"]])
+            return ("fuzzy", 0.85,
+                    f"UTR + amount matched exactly; settlement date drifted {date_drift}d "
+                    f"beyond the {date_drift_ok_days}d policy window", [single["line_id"]])
+        if amount_diff_pct <= fee_tolerance_pct:
+            return ("fuzzy", 0.9,
+                    f"UTR matched; amount differs by {amount_diff_pct:.1%}, within fee tolerance",
+                    [single["line_id"]])
+        # a single line references this UTR but the amount is genuinely
+        # wrong -- don't let a lucky group-sum below paper over that below;
+        # the caller handles this as amount_mismatch, not a group match.
+        return None
+
+    if len(utr_matches) >= 2:
+        for size in range(2, min(MAX_GROUP_SIZE, len(utr_matches)) + 1):
+            for combo in combinations(utr_matches, size):
+                total = round(sum(b["amount"] for b in combo), 2)
+                if abs(total - stl["amount"]) <= 0.01:
+                    return ("group_split", 0.95,
+                            f"Settlement UTR not found on a single bank line, but {size} bank "
+                            f"lines sharing that UTR sum exactly to the settlement amount",
+                            [b["line_id"] for b in combo])
+    return None
 
 
 def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict],
@@ -88,45 +134,30 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
             continue
 
         picked = None
+        picked_stl = None
         for stl in candidate_settlements:
             if stl["settlement_id"] in resolved_settlement_ids:
                 continue
-            bank_hit = next((b for b in unmatched_bank.values() if stl["utr"] in b["narration"]), None)
-            if bank_hit is None:
+            utr_matches = [b for b in unmatched_bank.values() if stl["utr"] in b["narration"]]
+            if not utr_matches:
                 continue
-
-            amount_diff_pct = abs(stl["amount"] - order["amount"]) / order["amount"]
-            date_drift = abs((_parse_date(stl["settled_at"]) - _parse_date(order["created_at"])).days)
-
-            if amount_diff_pct < 0.001 and bank_hit["amount"] == stl["amount"]:
-                # Exact amount is necessary but not sufficient for "exact":
-                # date drift is checked here too, not in a separate branch,
-                # specifically so a genuinely wrong amount elsewhere can
-                # never get waved through just because it coincides with a
-                # large date drift -- that was a real bug caught by a test
-                # exercising a strict date_drift_ok_days value.
-                if date_drift <= date_drift_ok_days:
-                    picked = (stl, bank_hit, "exact", 1.0, "UTR + amount matched exactly")
-                else:
-                    picked = (stl, bank_hit, "fuzzy", 0.85,
-                              f"UTR + amount matched exactly; settlement date drifted {date_drift}d "
-                              f"beyond the {date_drift_ok_days}d policy window")
-            elif amount_diff_pct <= fee_tolerance_pct and bank_hit["amount"] == stl["amount"]:
-                picked = (stl, bank_hit, "fuzzy", 0.9,
-                          f"UTR matched; amount differs by {amount_diff_pct:.1%}, within fee tolerance")
-            else:
+            result = _find_settlement_match(stl, order, utr_matches, fee_tolerance_pct, date_drift_ok_days)
+            if result is None:
                 continue
+            picked, picked_stl = result, stl
             break
 
         if picked:
-            stl, bank_hit, method, confidence, note = picked
+            method, confidence, note, bank_line_ids = picked
+            stl = picked_stl
             matches.append({
                 "order_id": order["order_id"], "settlement_id": stl["settlement_id"],
-                "bank_line_id": bank_hit["line_id"], "method": method,
-                "confidence": confidence, "note": note,
+                "bank_line_id": bank_line_ids[0], "bank_line_ids": bank_line_ids,
+                "method": method, "confidence": confidence, "note": note,
             })
             resolved_settlement_ids.add(stl["settlement_id"])
-            unmatched_bank.pop(bank_hit["line_id"], None)
+            for bank_line_id in bank_line_ids:
+                unmatched_bank.pop(bank_line_id, None)
             log("match", "matched", method, confidence, note, order_id=order["order_id"])
         else:
             stl = candidate_settlements[0]
