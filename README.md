@@ -3,7 +3,7 @@
 A multi-source reconciliation agent for the Razorpay AI Buildathon —
 **Track 04: AI Finance Controller**.
 
-**Live demo:** _add-your-vercel-url-here_ · **Repo:** https://github.com/Shaurya55555/reconiq
+**Live demo:** https://reconiq-mocha.vercel.app · **Repo:** https://github.com/Shaurya55555/reconiq
 
 ## What it solves
 
