@@ -2,34 +2,72 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>ReconIQ - Multi-source Reconciliation Agent</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReconIQ - AI Finance Controller</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%AE%3C/text%3E%3C/svg%3E">
 <style>
   :root {
-    --bg: #0b0f14; --panel: #131a22; --border: #232d38; --text: #e6edf3;
-    --muted: #8b98a5; --accent: #4fd1c5; --bad: #f47174; --warn: #f2c94c; --good: #6fcf97;
+    --bg: #0a0e13; --bg2: #0d1218; --panel: #131a22; --panel2: #161e28; --border: #232d38;
+    --border-soft: #1a232d; --text: #e9eef3; --muted: #8b98a5; --muted2: #6b7686;
+    --accent: #4fd1c5; --accent-dim: #2a4d49; --bad: #f47174; --warn: #f2c94c; --good: #6fcf97;
+    --radius: 12px;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
-  header { padding: 24px 32px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-  header h1 { margin: 0; font-size: 20px; }
-  header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
-  main { max-width: 1100px; margin: 0 auto; padding: 24px 32px; }
-  button { background: var(--accent); color: #04211d; border: none; padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; }
-  button.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--border); font-weight: 500; padding: 8px 14px; }
-  button:disabled { opacity: 0.5; cursor: default; }
-  input[type=number], input[type=text] { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 8px 10px; border-radius: 6px; }
-  .row { display: flex; gap: 12px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
-  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
-  .card .value { font-size: 26px; font-weight: 700; margin-top: 6px; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif; line-height: 1.45;
+    background-image: radial-gradient(ellipse 900px 500px at 50% -10%, rgba(79,209,197,0.08), transparent);
+  }
+  header { padding: 20px 32px; border-bottom: 1px solid var(--border-soft); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+  header .brand { display: flex; align-items: center; gap: 10px; }
+  header .brand-mark { font-size: 22px; }
+  header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+  header p { margin: 1px 0 0; color: var(--muted2); font-size: 12px; }
+  main { max-width: 1080px; margin: 0 auto; padding: 0 32px 48px; }
+  button {
+    background: var(--accent); color: #04211d; border: none; padding: 12px 22px; border-radius: 8px;
+    font-weight: 700; font-size: 14px; cursor: pointer; transition: transform 0.1s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+    box-shadow: 0 2px 12px rgba(79,209,197,0.15);
+  }
+  button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(79,209,197,0.25); }
+  button:active:not(:disabled) { transform: translateY(0); }
+  button.secondary {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border); font-weight: 500;
+    padding: 8px 14px; box-shadow: none;
+  }
+  button.secondary:hover:not(:disabled) { border-color: var(--accent-dim); transform: none; box-shadow: none; }
+  button:disabled { opacity: 0.5; cursor: default; transform: none !important; box-shadow: none !important; }
+  input[type=number], input[type=text] {
+    background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 8px 10px;
+    border-radius: 7px; font-size: 13px; transition: border-color 0.15s ease;
+  }
+  input[type=number]:focus, input[type=text]:focus { outline: none; border-color: var(--accent-dim); }
+  .row { display: flex; gap: 14px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
+  .row label { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .card {
+    background: linear-gradient(180deg, var(--panel2), var(--panel)); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px 18px; transition: border-color 0.2s ease;
+  }
+  .card:hover { border-color: var(--border-soft); }
+  .card.big { padding: 20px 22px; }
+  .card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+  .card .value { font-size: 25px; font-weight: 800; margin-top: 8px; letter-spacing: -0.01em; }
+  .card.big .value { font-size: 30px; }
   .value.good { color: var(--good); } .value.warn { color: var(--warn); } .value.bad { color: var(--bad); }
+  .cards-group-label {
+    font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.08em;
+    font-weight: 700; margin: 22px 0 10px;
+  }
   section { margin-bottom: 28px; }
-  h2 { font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+  h2 {
+    font-size: 14px; color: var(--text); text-transform: none; letter-spacing: 0; font-weight: 700;
+    border-bottom: 1px solid var(--border-soft); padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center;
+  }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 600; }
-  tr:hover td { background: #16202a; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border-soft); }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+  tr:hover td { background: var(--panel2); }
   .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
   .tag.exact { background: #123a35; color: var(--good); }
   .tag.fuzzy { background: #3a3312; color: var(--warn); }
@@ -44,16 +82,55 @@
   #chat-log .msg { padding: 8px 12px; border-radius: 8px; margin-bottom: 8px; font-size: 13px; }
   #chat-log .q { background: #16202a; }
   #chat-log .a { background: var(--panel); border: 1px solid var(--border); }
-  #status { color: var(--muted); font-size: 13px; }
+  #status { color: var(--muted); font-size: 13px; display: inline-flex; align-items: center; gap: 8px; }
   .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
   .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 700px) { .charts { grid-template-columns: 1fr; } }
-  .chart-box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .chart-box { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
   .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12px; }
   .bar-label { width: 130px; color: var(--muted); flex-shrink: 0; }
   .bar-track { flex: 1; background: #0e141b; border-radius: 4px; height: 14px; overflow: hidden; }
-  .bar-fill { height: 100%; border-radius: 4px; }
+  .bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
   .bar-count { width: 34px; text-align: right; color: var(--muted); }
+
+  /* Hero */
+  .hero { padding: 40px 0 28px; text-align: center; border-bottom: 1px solid var(--border-soft); margin-bottom: 32px; }
+  .hero-title { display: block; font-size: 30px; font-weight: 800; margin: 0 0 8px; letter-spacing: -0.02em; }
+  .hero-title .accent-word { color: var(--accent); }
+  .hero-sub { color: var(--muted); font-size: 15px; margin: 0 0 28px; }
+  .hero-run-row { display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+  .hero-run-row .row-inputs { display: flex; gap: 10px; align-items: center; }
+  .run-btn-main { padding: 13px 28px; font-size: 15px; }
+  .spinner {
+    display: none; width: 14px; height: 14px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite;
+  }
+  .spinner.active { display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .advanced-toggle { text-align: left; max-width: 640px; margin: 0 auto; }
+  .advanced-toggle summary {
+    cursor: pointer; color: var(--muted); font-size: 13px; text-align: center; list-style: none;
+    user-select: none;
+  }
+  .advanced-toggle summary::-webkit-details-marker { display: none; }
+  .advanced-toggle summary:hover { color: var(--text); }
+  .advanced-toggle summary::before { content: "\2699️  "; }
+  .advanced-panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px 20px; margin-top: 14px;
+  }
+  .advanced-panel .row:last-child { margin-bottom: 0; }
+  .advanced-panel-label { font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; margin: 14px 0 8px; }
+  .advanced-panel-label:first-child { margin-top: 0; }
+
+  .empty-state {
+    text-align: center; padding: 56px 20px; color: var(--muted); border: 1px dashed var(--border);
+    border-radius: var(--radius); font-size: 14px;
+  }
+  .empty-state .icon { font-size: 32px; margin-bottom: 10px; opacity: 0.6; }
+
+  .validation-section { border-top: 1px solid var(--border-soft); padding-top: 28px; margin-top: 8px; }
+  .validation-eyebrow { font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 6px; }
   .why-btn { font-size: 12px; padding: 5px 10px; }
   #evidence-overlay {
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100;
@@ -77,45 +154,78 @@
 </head>
 <body>
 <header>
-  <div>
-    <h1>ReconIQ</h1>
-    <p>Multi-source reconciliation agent &middot; orders &times; Razorpay settlements &times; bank statement</p>
+  <div class="brand">
+    <span class="brand-mark">🧮</span>
+    <div>
+      <h1>ReconIQ</h1>
+      <p>AI Finance Controller &middot; orders &times; Razorpay settlements &times; bank statement</p>
+    </div>
   </div>
   <div id="provider-badge" style="color: var(--muted); font-size: 12px;"></div>
 </header>
 <main>
-  <div class="row">
-    <label>Orders in batch: <input id="n-orders" type="number" value="70" min="10" max="500"></label>
-    <label>Seed (optional, for a reproducible batch): <input id="seed" type="number" placeholder="random"></label>
-    <button id="run-btn">Run reconciliation</button>
-    <span id="status"></span>
-  </div>
-  <div class="row" style="margin-top:-12px">
-    <label title="Auto-accept bar for an LLM-proposed match">LLM confidence threshold:
-      <input id="confidence-threshold" type="number" value="0.6" min="0" max="1" step="0.05" style="width:70px"></label>
-    <label title="Max settlement-vs-order amount difference treated as a plausible fee, not a mismatch">Fee tolerance %:
-      <input id="fee-tolerance" type="number" value="3" min="0" max="50" step="0.5" style="width:60px"></label>
-    <label title="Settlement date drift beyond this many days is flagged as fuzzy, not exact">Date drift OK (days):
-      <input id="date-drift" type="number" value="3" min="0" max="30" style="width:60px"></label>
-  </div>
+  <section class="hero">
+    <h2 class="hero-title">Verify every <span class="accent-word">rupee</span>.<br>Escalate what can't be proven.</h2>
+    <p class="hero-sub">Deterministic matching first, AI only where rules genuinely can't resolve it, honest exceptions for the rest.</p>
 
-  <details style="margin-bottom:20px">
-    <summary style="cursor:pointer; color:var(--muted); font-size:13px">Bring your own data (CSV)</summary>
-    <div class="row" style="margin-top:12px">
-      <label>Orders CSV: <input id="upload-orders" type="file" accept=".csv"></label>
-      <label>Settlements CSV: <input id="upload-settlements" type="file" accept=".csv"></label>
-      <label>Bank lines CSV: <input id="upload-bank-lines" type="file" accept=".csv"></label>
-      <button class="secondary" id="upload-run-btn">Run on my data</button>
+    <div class="hero-run-row">
+      <div class="row-inputs">
+        <label>Orders: <input id="n-orders" type="number" value="70" min="10" max="500" style="width:64px"></label>
+        <label>Seed: <input id="seed" type="number" placeholder="random" style="width:90px"></label>
+      </div>
+      <button id="run-btn" class="run-btn-main">Run Controller</button>
     </div>
-    <p style="color:var(--muted); font-size:12px; margin:6px 0 0">
-      Required columns &mdash; orders: order_id, amount, razorpay_payment_id, created_at.
-      settlements: settlement_id, payment_id, utr, amount, settled_at.
-      bank_lines: line_id, narration, amount, value_date.
-      No ground-truth accuracy is shown for your own data (no seeded truth label to score against) &mdash;
-      match rate, amount at risk, and the exception list still are.
-    </p>
-  </details>
+    <div id="status"><span class="spinner" id="run-spinner"></span><span id="status-text"></span></div>
 
+    <details class="advanced-toggle">
+      <summary>Advanced settings &amp; bring your own data</summary>
+      <div class="advanced-panel">
+        <div class="advanced-panel-label">Reconciliation policy</div>
+        <div class="row">
+          <label title="Auto-accept bar for an LLM-proposed match">LLM confidence threshold:
+            <input id="confidence-threshold" type="number" value="0.6" min="0" max="1" step="0.05" style="width:70px"></label>
+          <label title="Max settlement-vs-order amount difference treated as a plausible fee, not a mismatch">Fee tolerance %:
+            <input id="fee-tolerance" type="number" value="3" min="0" max="50" step="0.5" style="width:60px"></label>
+          <label title="Settlement date drift beyond this many days is flagged as fuzzy, not exact">Date drift OK (days):
+            <input id="date-drift" type="number" value="3" min="0" max="30" style="width:60px"></label>
+        </div>
+
+        <div class="advanced-panel-label">Bring your own data (CSV)</div>
+        <div class="row">
+          <label>Orders CSV: <input id="upload-orders" type="file" accept=".csv"></label>
+          <label>Settlements CSV: <input id="upload-settlements" type="file" accept=".csv"></label>
+          <label>Bank lines CSV: <input id="upload-bank-lines" type="file" accept=".csv"></label>
+        </div>
+        <div class="row">
+          <button class="secondary" id="upload-run-btn">Run on my data</button>
+        </div>
+        <p style="color:var(--muted); font-size:12px; margin:6px 0 0">
+          Required columns &mdash; orders: order_id, amount, razorpay_payment_id, created_at.
+          settlements: settlement_id, payment_id, utr, amount, settled_at.
+          bank_lines: line_id, narration, amount, value_date.
+          No ground-truth accuracy is shown for your own data (no seeded truth label to score against) &mdash;
+          match rate, amount at risk, and the exception list still are.
+        </p>
+      </div>
+    </details>
+  </section>
+
+  <div class="empty-state" id="empty-state">
+    <div class="icon">📊</div>
+    No run yet &mdash; click <strong>Run Controller</strong> above to reconcile a live batch.
+  </div>
+
+  <div id="results" style="display:none">
+
+  <div class="cards-group-label">Financial position</div>
+  <div class="cards" id="amount-cards" style="display:none">
+    <div class="card big"><div class="label">Amount processed</div><div class="value" id="c-amount-processed">--</div></div>
+    <div class="card big"><div class="label">Amount reconciled</div><div class="value good" id="c-amount-matched">--</div></div>
+    <div class="card big"><div class="label">Amount at risk</div><div class="value" id="c-amount-at-risk">--</div></div>
+    <div class="card big" id="value-accuracy-card" style="display:none"><div class="label">Value accuracy</div><div class="value" id="c-amount-accuracy">--</div></div>
+  </div>
+
+  <div class="cards-group-label">Reconciliation quality</div>
   <div class="cards" id="cards" style="display:none">
     <div class="card"><div class="label">Ground-truth accuracy</div><div class="value" id="c-accuracy">--</div></div>
     <div class="card"><div class="label">Match rate</div><div class="value" id="c-match-rate">--</div></div>
@@ -123,23 +233,18 @@
     <div class="card"><div class="label">Exceptions</div><div class="value" id="c-exceptions">--</div></div>
     <div class="card"><div class="label">Throughput</div><div class="value" id="c-throughput">--</div></div>
   </div>
-
-  <div class="cards" id="amount-cards" style="display:none">
-    <div class="card"><div class="label">Amount reconciled</div><div class="value good" id="c-amount-matched">--</div></div>
-    <div class="card"><div class="label">Amount at risk</div><div class="value" id="c-amount-at-risk">--</div></div>
-  </div>
-  <p id="accuracy-note" style="display:none; color:var(--muted); font-size:12px; margin:-16px 0 20px">
+  <p id="accuracy-note" style="display:none; color:var(--muted); font-size:12px; margin:-8px 0 20px">
     Ground-truth accuracy is scored against the known-correct label seeded into each synthetic order
     (not visible to the matcher) &mdash; match rate alone only tells you volume, not correctness.
   </p>
 
+  <div class="cards-group-label">Safety: how it's wrong when it's wrong</div>
   <div class="cards" id="money-weighted-cards" style="display:none">
-    <div class="card"><div class="label">Amount accuracy</div><div class="value" id="c-amount-accuracy">--</div></div>
     <div class="card"><div class="label">False-clear amount</div><div class="value bad" id="c-false-clear">--</div></div>
     <div class="card"><div class="label">Safe-miss amount</div><div class="value warn" id="c-safe-miss">--</div></div>
   </div>
-  <p id="money-weighted-note" style="display:none; color:var(--muted); font-size:12px; margin:-16px 0 20px">
-    Transaction-count accuracy treats every order equally; amount accuracy weights by rupee value.
+  <p id="money-weighted-note" style="display:none; color:var(--muted); font-size:12px; margin:-8px 0 20px">
+    Transaction-count accuracy treats every order equally; value accuracy weights by rupee value.
     False-clear = confidently wrong (matched when it should have been an exception, the dangerous
     failure). Safe-miss = conservative (flagged as an exception when it should have matched, money
     just sits reviewable instead of moving wrong).
@@ -196,9 +301,12 @@
     </div>
   </section>
 
-  <section id="benchmark-section">
-    <h2>Benchmark: accuracy across corruption levels</h2>
-    <p style="color:var(--muted); font-size:12px; margin-top:-4px">
+  </div><!-- /#results -->
+
+  <section id="benchmark-section" class="validation-section">
+    <div class="validation-eyebrow">Validation &amp; robustness</div>
+    <h2>Accuracy across corruption levels</h2>
+    <p style="color:var(--muted); font-size:12px; margin-top:10px">
       Runs fresh batches at increasing corruption rates (not the same batch shown above) so the
       accuracy number isn't just true for one cherry-picked run.
     </p>
@@ -235,6 +343,11 @@ const tagFor = (method) => `<span class="tag ${esc(method)}">${esc(method)}</spa
 const METHOD_COLORS = { exact: "#6fcf97", fuzzy: "#f2c94c", llm: "#7aa2f7", human_override: "#c792ea" };
 const EXCEPTION_COLOR = "#f47174";
 
+function setStatus(text, loading) {
+  $("status-text").textContent = text;
+  $("run-spinner").classList.toggle("active", !!loading);
+}
+
 async function runReconciliation() {
   const n = parseInt($("n-orders").value, 10) || 70;
   const seedVal = $("seed").value.trim();
@@ -243,7 +356,7 @@ async function runReconciliation() {
   const feeTolerancePct = parseFloat($("fee-tolerance").value) / 100;
   const dateDriftOkDays = parseInt($("date-drift").value, 10);
   $("run-btn").disabled = true;
-  $("status").textContent = "Generating batch and reconciling...";
+  setStatus("Generating batch and reconciling...", true);
   try {
     const res = await fetch(`${API}/api/run`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -255,9 +368,9 @@ async function runReconciliation() {
     if (!res.ok) throw new Error(`API returned ${res.status}`);
     currentRun = await res.json();
     renderAll();
-    $("status").textContent = `Run ${currentRun.run_id} complete.`;
+    setStatus(`Run ${currentRun.run_id} complete.`, false);
   } catch (e) {
-    $("status").textContent = "Error: " + e.message;
+    setStatus("Error: " + e.message, false);
   } finally {
     $("run-btn").disabled = false;
   }
@@ -303,7 +416,7 @@ function readFileAsText(fileInput) {
 
 async function runOnUploadedData() {
   $("upload-run-btn").disabled = true;
-  $("status").textContent = "Parsing CSVs and reconciling...";
+  setStatus("Parsing CSVs and reconciling...", true);
   try {
     const [ordersText, settlementsText, bankLinesText] = await Promise.all([
       readFileAsText($("upload-orders")), readFileAsText($("upload-settlements")), readFileAsText($("upload-bank-lines")),
@@ -330,15 +443,18 @@ async function runOnUploadedData() {
     currentRun.ground_truth = null;
     currentRun.rules_only_summary = null;
     renderAll();
-    $("status").textContent = `Ran on your uploaded data: ${orders.length} orders.`;
+    setStatus(`Ran on your uploaded data: ${orders.length} orders.`, false);
   } catch (e) {
-    $("status").textContent = "Error: " + e.message;
+    setStatus("Error: " + e.message, false);
   } finally {
     $("upload-run-btn").disabled = false;
   }
 }
 
-function renderAll() {
+function renderAll(scrollTo = true) {
+  $("empty-state").style.display = "none";
+  $("results").style.display = "";
+
   renderSummary(currentRun.summary);
   renderMethodChart(currentRun.matches);
   renderExceptionChart(currentRun.exceptions);
@@ -352,6 +468,8 @@ function renderAll() {
   if (currentRun.ground_truth && currentRun.ground_truth.misclassified.length) sections.push("misclassified-section");
   if (currentRun.rules_only_summary) sections.push("rules-only-section");
   sections.forEach((id) => $(id).style.display = "");
+
+  if (scrollTo) $("results").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function renderRulesOnlyComparison(rulesOnly, withAi) {
@@ -370,7 +488,7 @@ function renderRulesOnlyComparison(rulesOnly, withAi) {
 }
 
 async function submitOverride(action, orderId, bankLineId, reviewerNote) {
-  $("status").textContent = "Applying override...";
+  $("status-text").textContent = "Applying override...";
   try {
     const res = await fetch(`${API}/api/override`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -386,10 +504,10 @@ async function submitOverride(action, orderId, bankLineId, reviewerNote) {
     }
     const updated = await res.json();
     currentRun = { ...currentRun, ...updated };
-    renderAll();
-    $("status").textContent = `Override applied to ${orderId}.`;
+    renderAll(false);
+    $("status-text").textContent = `Override applied to ${orderId}.`;
   } catch (e) {
-    $("status").textContent = "Override failed: " + e.message;
+    $("status-text").textContent = "Override failed: " + e.message;
   }
 }
 
@@ -491,6 +609,7 @@ function renderSummary(s) {
   $("provider-badge").textContent = "LLM layer: " + s.llm_provider;
 
   if (typeof s.total_amount_at_risk === "number") {
+    $("c-amount-processed").textContent = rupees(s.total_amount_matched + s.total_amount_at_risk);
     $("c-amount-matched").textContent = rupees(s.total_amount_matched);
     $("c-amount-at-risk").textContent = rupees(s.total_amount_at_risk);
     $("c-amount-at-risk").className = "value " + (s.total_amount_at_risk === 0 ? "good" : "bad");
@@ -500,6 +619,7 @@ function renderSummary(s) {
   if (typeof s.amount_accuracy === "number") {
     $("c-amount-accuracy").textContent = pct(s.amount_accuracy);
     $("c-amount-accuracy").className = "value " + (s.amount_accuracy >= 0.95 ? "good" : "warn");
+    $("value-accuracy-card").style.display = "";
     $("c-false-clear").textContent = rupees(s.false_clear_amount);
     $("c-safe-miss").textContent = rupees(s.safe_miss_amount);
     $("money-weighted-cards").style.display = "";
@@ -670,7 +790,7 @@ $("exceptions-table").addEventListener("click", (e) => {
   const orderId = btn.dataset.orderId;
   const select = $("exceptions-table").querySelector(`select.manual-match-select[data-order-id="${CSS.escape(orderId)}"]`);
   const bankLineId = select ? select.value : "";
-  if (!bankLineId) { $("status").textContent = "Pick a bank line before manually matching."; return; }
+  if (!bankLineId) { $("status-text").textContent = "Pick a bank line before manually matching."; return; }
   submitOverride("manual_match", orderId, bankLineId, "Manually matched by reviewer after checking bank portal");
 });
 
