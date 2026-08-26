@@ -52,6 +52,37 @@ class BenchmarkRequest(BaseModel):
     use_llm: bool = True
 
 
+REQUIRED_ORDER_FIELDS = {"order_id", "amount", "razorpay_payment_id", "created_at"}
+REQUIRED_SETTLEMENT_FIELDS = {"settlement_id", "payment_id", "utr", "amount", "settled_at"}
+REQUIRED_BANK_LINE_FIELDS = {"line_id", "narration", "amount", "value_date"}
+
+
+class UploadRunRequest(BaseModel):
+    orders: list[dict]
+    settlements: list[dict]
+    bank_lines: list[dict]
+    confidence_threshold: float | None = None
+    fee_tolerance_pct: float = matcher.FEE_TOLERANCE_PCT
+    date_drift_ok_days: int = matcher.DATE_DRIFT_OK_DAYS
+
+
+def _validate_and_coerce(rows: list[dict], required: set[str], label: str) -> list[dict]:
+    if not rows:
+        raise ValueError(f"No {label} rows provided.")
+    cleaned = []
+    for i, row in enumerate(rows):
+        missing = required - row.keys()
+        if missing:
+            raise ValueError(f"{label} row {i + 1} is missing required column(s): {', '.join(sorted(missing))}")
+        row = dict(row)
+        try:
+            row["amount"] = float(row["amount"])
+        except (TypeError, ValueError):
+            raise ValueError(f"{label} row {i + 1} has a non-numeric amount: {row.get('amount')!r}")
+        cleaned.append(row)
+    return cleaned
+
+
 class OverrideRequest(BaseModel):
     orders: list[dict]
     matches: list[dict]
@@ -161,6 +192,52 @@ def benchmark(req: BenchmarkRequest):
         "use_llm": req.use_llm,
         "llm_provider": os.getenv("LLM_PROVIDER", "heuristic (offline fallback)") if req.use_llm else "disabled for this benchmark",
         "results": results,
+    }
+
+
+@app.post("/api/run-upload")
+def run_uploaded_data(req: UploadRunRequest):
+    """Bring-your-own-data: same pipeline, same policy knobs, real uploaded
+    orders/settlements/bank_lines instead of synthetic ones. No ground-truth
+    scoring here -- uploaded data has no seeded _truth label, so accuracy
+    against a known-correct answer genuinely cannot be computed; the
+    response reports match rate, amount at risk, and the exception list,
+    honestly, without a fabricated accuracy number.
+    """
+    try:
+        orders = _validate_and_coerce(req.orders, REQUIRED_ORDER_FIELDS, "orders")
+        settlements = _validate_and_coerce(req.settlements, REQUIRED_SETTLEMENT_FIELDS, "settlements")
+        bank_lines = _validate_and_coerce(req.bank_lines, REQUIRED_BANK_LINE_FIELDS, "bank_lines")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    threshold = req.confidence_threshold
+    if threshold is None:
+        threshold = float(os.getenv("LLM_CONFIDENCE_THRESHOLD", matcher.DEFAULT_LLM_CONFIDENCE_THRESHOLD))
+
+    t0 = time.perf_counter()
+    rule_result = matcher.reconcile(orders, settlements, bank_lines,
+                                     fee_tolerance_pct=req.fee_tolerance_pct,
+                                     date_drift_ok_days=req.date_drift_ok_days)
+    final = matcher.apply_llm_resolutions(rule_result, llm_resolver.resolve, confidence_threshold=threshold)
+    elapsed = time.perf_counter() - t0
+
+    summary = matcher.summarize(orders, final)
+    summary["throughput_records_per_sec"] = round(len(orders) / elapsed, 1) if elapsed > 0 else None
+    summary["elapsed_seconds"] = round(elapsed, 3)
+    summary["llm_provider"] = os.getenv("LLM_PROVIDER", "heuristic (offline fallback)")
+    summary["confidence_threshold"] = threshold
+    summary["fee_tolerance_pct"] = req.fee_tolerance_pct
+    summary["date_drift_ok_days"] = req.date_drift_ok_days
+
+    return {
+        "summary": summary,
+        "orders": orders,
+        "settlements": settlements,
+        "bank_lines": bank_lines,
+        "matches": final["matches"],
+        "exceptions": final["exceptions"],
+        "audit_trail": final["audit_trail"],
     }
 
 

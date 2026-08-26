@@ -38,6 +38,12 @@ ReconIQ closes that loop automatically on a batch of orders:
    unclaimed bank line via `POST /api/override`, logged distinctly as
    `human_override` in the audit trail so it's never confused with an
    automated decision.
+6. **Bring your own data** — the same pipeline runs against uploaded
+   `orders.csv` / `settlements.csv` / `bank_lines.csv` (`POST
+   /api/run-upload`, or the dashboard's "Bring your own data" panel).
+   Ground-truth accuracy is honestly omitted for uploaded data — there's
+   no seeded truth label to score against — but match rate, amount at
+   risk, and the exception list are still reported.
 
 ## Money-weighted accuracy, and the two ways to be wrong
 
@@ -51,9 +57,16 @@ modes that are not equally bad:
 - **Safe miss** — conservative: excepted when it should have matched.
   Money just sits flagged for review instead of moving wrong.
 
-A real run against the live deployment: **0 false-clear amount** in both
-the rules-only and rules+AI passes on the same batch — every mistake the
-system made was a safe miss, never a confident wrong match.
+**Bounded claim, not a guarantee:** across the corruption-rate benchmark
+sweep (`POST /api/benchmark`, batches at 10/20/30/40/50% corruption,
+rules-only and rules+AI both measured on each) run against the live
+deployment, false-clear amount was **₹0 at every corruption level
+tested**. That means every mistake the system made in these runs was a
+safe miss (flagged for review), never a confident wrong match — but it's
+an empirical result over the batches actually run, on synthetic data
+whose thresholds were tuned alongside the generator (see the honesty
+note below), not a mathematical guarantee that holds for arbitrary
+real-world noise or an adversarial input.
 
 ## Rules-only vs. rules+AI, same batch
 
@@ -136,6 +149,28 @@ than a suspiciously clean one.
 
 Reproduce with `POST /api/run {"n_orders": 80, "seed": 8}` against a
 deployment with `LLM_PROVIDER=gemini` configured.
+
+**Scale test (1,000 orders, seed=42, real Gemini, run locally):**
+
+```
+elapsed:                187.2s   (5.3 records/sec, dominated by ~65 sequential Gemini calls)
+match_rate:              0.865   (587 exact, 213 fuzzy, 65 llm)
+ground_truth_accuracy:   0.99
+amount_accuracy:         0.9897
+false_clear_amount:      ₹0
+safe_miss_amount:        ₹1,30,390
+exception_count:         231
+```
+
+**Honest limitation this surfaced:** the same 1,000-order request against
+the *live Vercel deployment* times out — a serverless function has a
+duration cap, and ~65 sequential LLM calls at real network latency
+exceeds it. Run locally (no serverless limit) it completes fine, at the
+throughput above. This is a real, known constraint, not glossed over: the
+deployed demo is sized for the batches shown throughout this README
+(≤100–150 orders); a production version would parallelize the LLM
+resolution calls rather than run them sequentially, or move long batches
+to a background job instead of a request/response cycle.
 
 ## Why this design (not just a rules engine with a chatbot bolted on)
 

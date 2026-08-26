@@ -56,6 +56,33 @@ def test_run_endpoint_includes_rules_only_counterfactual():
     assert rules_only["exception_count"] >= run["summary"]["exception_count"]
 
 
+def test_run_upload_endpoint_reconciles_hand_built_data_with_no_ground_truth():
+    orders = [{"order_id": "ORD1", "amount": 1000.0, "razorpay_payment_id": "pay_1",
+               "created_at": "2026-08-01T00:00:00", "customer": "Test"}]
+    settlements = [{"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR123456789",
+                     "amount": 1000.0, "settled_at": "2026-08-02"}]
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR123456789-RAZORPAY",
+                    "amount": 1000.0, "value_date": "2026-08-02"}]
+
+    res = client.post("/api/run-upload", json={
+        "orders": orders, "settlements": settlements, "bank_lines": bank_lines,
+    })
+    assert res.status_code == 200
+    body = res.json()
+    assert body["summary"]["total_orders"] == 1
+    assert body["summary"]["matched"] == 1
+    assert "ground_truth_accuracy" not in body["summary"]  # no fabricated accuracy claim
+
+
+def test_run_upload_endpoint_rejects_missing_required_columns():
+    res = client.post("/api/run-upload", json={
+        "orders": [{"order_id": "ORD1", "amount": 100.0}],  # missing required fields
+        "settlements": [], "bank_lines": [],
+    })
+    assert res.status_code == 400
+    assert "missing required column" in res.json()["detail"]
+
+
 def test_benchmark_endpoint_runs_across_corruption_rates():
     res = client.post("/api/benchmark", json={
         "n_orders": 60, "corruption_rates": [0.1, 0.3, 0.5], "seed_base": 100, "use_llm": False,

@@ -99,6 +99,23 @@
       <input id="date-drift" type="number" value="3" min="0" max="30" style="width:60px"></label>
   </div>
 
+  <details style="margin-bottom:20px">
+    <summary style="cursor:pointer; color:var(--muted); font-size:13px">Bring your own data (CSV)</summary>
+    <div class="row" style="margin-top:12px">
+      <label>Orders CSV: <input id="upload-orders" type="file" accept=".csv"></label>
+      <label>Settlements CSV: <input id="upload-settlements" type="file" accept=".csv"></label>
+      <label>Bank lines CSV: <input id="upload-bank-lines" type="file" accept=".csv"></label>
+      <button class="secondary" id="upload-run-btn">Run on my data</button>
+    </div>
+    <p style="color:var(--muted); font-size:12px; margin:6px 0 0">
+      Required columns &mdash; orders: order_id, amount, razorpay_payment_id, created_at.
+      settlements: settlement_id, payment_id, utr, amount, settled_at.
+      bank_lines: line_id, narration, amount, value_date.
+      No ground-truth accuracy is shown for your own data (no seeded truth label to score against) &mdash;
+      match rate, amount at risk, and the exception list still are.
+    </p>
+  </details>
+
   <div class="cards" id="cards" style="display:none">
     <div class="card"><div class="label">Ground-truth accuracy</div><div class="value" id="c-accuracy">--</div></div>
     <div class="card"><div class="label">Match rate</div><div class="value" id="c-match-rate">--</div></div>
@@ -243,6 +260,81 @@ async function runReconciliation() {
     $("status").textContent = "Error: " + e.message;
   } finally {
     $("run-btn").disabled = false;
+  }
+}
+
+function parseCsv(text) {
+  // Minimal RFC4180-ish parser: handles quoted fields, embedded commas,
+  // and "" as an escaped quote. Good enough for the kind of flat exports
+  // (bank statements, settlement reports) this feature targets.
+  const rows = [];
+  let row = [], field = "", inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (c === '"') { inQuotes = false; }
+      else { field += c; }
+    } else if (c === '"') { inQuotes = true; }
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); field = "";
+      if (row.some(f => f !== "")) rows.push(row);
+      row = [];
+    } else { field += c; }
+  }
+  if (field !== "" || row.length) { row.push(field); rows.push(row); }
+  if (!rows.length) return [];
+  const headers = rows[0].map(h => h.trim());
+  return rows.slice(1).map(r => Object.fromEntries(headers.map((h, i) => [h, (r[i] ?? "").trim()])));
+}
+
+function readFileAsText(fileInput) {
+  const file = fileInput.files[0];
+  if (!file) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsText(file);
+  });
+}
+
+async function runOnUploadedData() {
+  $("upload-run-btn").disabled = true;
+  $("status").textContent = "Parsing CSVs and reconciling...";
+  try {
+    const [ordersText, settlementsText, bankLinesText] = await Promise.all([
+      readFileAsText($("upload-orders")), readFileAsText($("upload-settlements")), readFileAsText($("upload-bank-lines")),
+    ]);
+    if (!ordersText || !settlementsText || !bankLinesText) {
+      throw new Error("Pick all three CSV files (orders, settlements, bank lines).");
+    }
+    const orders = parseCsv(ordersText), settlements = parseCsv(settlementsText), bankLines = parseCsv(bankLinesText);
+
+    const res = await fetch(`${API}/api/run-upload`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        orders, settlements, bank_lines: bankLines,
+        confidence_threshold: parseFloat($("confidence-threshold").value),
+        fee_tolerance_pct: parseFloat($("fee-tolerance").value) / 100,
+        date_drift_ok_days: parseInt($("date-drift").value, 10),
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `API returned ${res.status}`);
+    }
+    currentRun = await res.json();
+    currentRun.ground_truth = null;
+    currentRun.rules_only_summary = null;
+    renderAll();
+    $("status").textContent = `Ran on your uploaded data: ${orders.length} orders.`;
+  } catch (e) {
+    $("status").textContent = "Error: " + e.message;
+  } finally {
+    $("upload-run-btn").disabled = false;
   }
 }
 
@@ -547,6 +639,7 @@ async function askQuestion() {
 }
 
 $("run-btn").addEventListener("click", runReconciliation);
+$("upload-run-btn").addEventListener("click", runOnUploadedData);
 $("chat-btn").addEventListener("click", askQuestion);
 $("chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") askQuestion(); });
 $("export-exceptions-btn").addEventListener("click", () => {
