@@ -14,7 +14,8 @@ def test_run_endpoint_returns_full_stateless_payload():
     res = client.post("/api/run", json={"n_orders": 40, "seed": 11})
     assert res.status_code == 200
     body = res.json()
-    for key in ("run_id", "summary", "orders", "matches", "exceptions", "audit_trail", "ground_truth"):
+    for key in ("run_id", "summary", "orders", "settlements", "bank_lines",
+                "matches", "exceptions", "audit_trail", "ground_truth"):
         assert key in body
     assert len(body["orders"]) == 40
     assert body["summary"]["total_orders"] == 40
@@ -53,6 +54,20 @@ def test_run_endpoint_includes_rules_only_counterfactual():
     # rules-only can only match fewer or equal orders than rules+AI on the same batch
     assert rules_only["matched"] <= run["summary"]["matched"]
     assert rules_only["exception_count"] >= run["summary"]["exception_count"]
+
+
+def test_benchmark_endpoint_runs_across_corruption_rates():
+    res = client.post("/api/benchmark", json={
+        "n_orders": 60, "corruption_rates": [0.1, 0.3, 0.5], "seed_base": 100, "use_llm": False,
+    })
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body["results"]) == 3
+    for r in body["results"]:
+        assert r["total_orders"] == 60
+        assert 0.0 <= r["ground_truth_accuracy"] <= 1.0
+    # noisier batches should generally produce more exceptions, not fewer
+    assert body["results"][0]["exception_count"] <= body["results"][-1]["exception_count"]
 
 
 def test_override_endpoint_returns_400_for_unknown_action():

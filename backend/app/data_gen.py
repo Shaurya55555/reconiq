@@ -39,10 +39,25 @@ ANOMALY_WEIGHTS = {
 }
 
 
-def _weighted_anomaly(rng: random.Random) -> Anomaly:
-    kinds = list(ANOMALY_WEIGHTS.keys())
-    weights = list(ANOMALY_WEIGHTS.values())
-    return rng.choices(kinds, weights=weights, k=1)[0]
+def _weights_for_corruption_rate(corruption_rate: float) -> dict[str, float]:
+    """Redistribute ANOMALY_WEIGHTS so `corruption_rate` is the total
+    probability of a non-clean order, split across the anomaly types in
+    their existing relative proportions. Used by the benchmark mode to
+    prove the reported accuracy holds up as data gets messier, not just
+    at whatever corruption level the default weights happen to produce.
+    """
+    other_total = sum(v for k, v in ANOMALY_WEIGHTS.items() if k != "clean")
+    weights = {"clean": 1.0 - corruption_rate}
+    for k, v in ANOMALY_WEIGHTS.items():
+        if k != "clean":
+            weights[k] = corruption_rate * (v / other_total)
+    return weights
+
+
+def _weighted_anomaly(rng: random.Random, weights: dict[str, float]) -> Anomaly:
+    kinds = list(weights.keys())
+    vals = list(weights.values())
+    return rng.choices(kinds, weights=vals, k=1)[0]
 
 
 def _utr(rng: random.Random) -> str:
@@ -64,8 +79,14 @@ def _garble(utr: str, rng: random.Random) -> str:
     return f"NEFT-{''.join(digits)}-RAZORPAY"
 
 
-def generate_batch(n_orders: int = 70, seed: int | None = None) -> dict:
+def generate_batch(n_orders: int = 70, seed: int | None = None,
+                    corruption_rate: float | None = None) -> dict:
+    """corruption_rate, if given, overrides ANOMALY_WEIGHTS' default ~45%
+    non-clean mix with an explicit total anomaly probability (0..1), used
+    by the benchmark mode to generate progressively messier batches.
+    """
     rng = random.Random(seed)
+    weights = _weights_for_corruption_rate(corruption_rate) if corruption_rate is not None else ANOMALY_WEIGHTS
     base_date = datetime(2026, 8, 1)
     orders, settlements, bank_lines = [], [], []
 
@@ -75,7 +96,7 @@ def generate_batch(n_orders: int = 70, seed: int | None = None) -> dict:
         amount = round(rng.uniform(299, 24999), 2)
         created_at = base_date + timedelta(days=rng.randint(0, 20), hours=rng.randint(0, 23))
         payment_id = f"pay_{rng.randint(10**10, 10**11 - 1)}"
-        anomaly = _weighted_anomaly(rng)
+        anomaly = _weighted_anomaly(rng, weights)
 
         orders.append({
             "order_id": order_id,

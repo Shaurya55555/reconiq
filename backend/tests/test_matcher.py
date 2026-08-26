@@ -153,6 +153,18 @@ def test_override_manual_match_clears_prior_exceptions_for_both_sides():
     }
 
 
+def test_corruption_rate_controls_the_clean_fraction():
+    clean_batch = data_gen.generate_batch(n_orders=300, seed=1, corruption_rate=0.05)
+    dirty_batch = data_gen.generate_batch(n_orders=300, seed=1, corruption_rate=0.6)
+
+    clean_fraction_a = sum(1 for o in clean_batch["orders"] if o["_truth"] == "clean") / 300
+    clean_fraction_b = sum(1 for o in dirty_batch["orders"] if o["_truth"] == "clean") / 300
+
+    assert clean_fraction_a > 0.85  # ~95% clean requested
+    assert clean_fraction_b < 0.55  # ~40% clean requested
+    assert clean_fraction_a > clean_fraction_b
+
+
 def test_fee_tolerance_is_a_real_parameter_not_a_fixed_constant():
     batch = data_gen.generate_batch(n_orders=150, seed=17)
     strict = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],

@@ -54,6 +54,25 @@
   .bar-track { flex: 1; background: #0e141b; border-radius: 4px; height: 14px; overflow: hidden; }
   .bar-fill { height: 100%; border-radius: 4px; }
   .bar-count { width: 34px; text-align: right; color: var(--muted); }
+  .why-btn { font-size: 12px; padding: 5px 10px; }
+  #evidence-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100;
+  }
+  #evidence-drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 92vw);
+    background: var(--panel); border-left: 1px solid var(--border); z-index: 101;
+    padding: 24px; overflow-y: auto; box-shadow: -8px 0 24px rgba(0,0,0,0.3);
+  }
+  #evidence-drawer h3 { margin: 0 0 4px; font-size: 16px; }
+  #evidence-drawer .close-btn { position: absolute; top: 20px; right: 20px; padding: 4px 10px; font-size: 13px; }
+  .evidence-verdict { font-size: 15px; font-weight: 700; padding: 10px 14px; border-radius: 8px; margin: 14px 0; }
+  .evidence-verdict.matched { background: #123a35; color: var(--good); }
+  .evidence-verdict.exception { background: #3a1414; color: var(--bad); }
+  .evidence-table { width: 100%; font-size: 13px; margin-bottom: 14px; }
+  .evidence-table td { padding: 5px 0; border: none; vertical-align: top; }
+  .evidence-table td:first-child { color: var(--muted); width: 40%; }
+  .evidence-section-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; margin: 16px 0 6px; }
+  .evidence-reasoning { background: #0e141b; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -159,7 +178,32 @@
       <button id="chat-btn">Ask</button>
     </div>
   </section>
+
+  <section id="benchmark-section">
+    <h2>Benchmark: accuracy across corruption levels</h2>
+    <p style="color:var(--muted); font-size:12px; margin-top:-4px">
+      Runs fresh batches at increasing corruption rates (not the same batch shown above) so the
+      accuracy number isn't just true for one cherry-picked run.
+    </p>
+    <div class="row">
+      <label>Batch size: <input id="bench-n-orders" type="number" value="80" min="20" max="300" style="width:70px"></label>
+      <label>Corruption rates (%): <input id="bench-rates" type="text" value="10,20,30,40,50" style="width:160px"></label>
+      <label><input id="bench-use-llm" type="checkbox" checked> Use LLM</label>
+      <button id="bench-run-btn">Run benchmark</button>
+      <span id="bench-status"></span>
+    </div>
+    <div id="benchmark-chart"></div>
+    <div id="benchmark-table"></div>
+  </section>
 </main>
+
+<div id="evidence-overlay">
+  <div id="evidence-drawer">
+    <button class="secondary close-btn" id="evidence-close-btn">Close</button>
+    <h3 id="evidence-title">Evidence</h3>
+    <div id="evidence-body"></div>
+  </div>
+</div>
 
 <script>
 const API = "";
@@ -257,6 +301,87 @@ async function submitOverride(action, orderId, bankLineId, reviewerNote) {
   }
 }
 
+function findOrder(orderId) {
+  return (currentRun.orders || []).find(o => o.order_id === orderId);
+}
+function findSettlementById(id) {
+  return (currentRun.settlements || []).find(s => s.settlement_id === id);
+}
+function findSettlementsByPaymentId(paymentId) {
+  return (currentRun.settlements || []).filter(s => s.payment_id === paymentId);
+}
+function findBankLineById(id) {
+  return (currentRun.bank_lines || []).find(b => b.line_id === id);
+}
+
+function daysBetween(isoA, isoB) {
+  if (!isoA || !isoB) return null;
+  const ms = Math.abs(new Date(isoA) - new Date(isoB));
+  return Math.round(ms / 86400000);
+}
+
+function showEvidence(orderId, bankLineId) {
+  const order = orderId ? findOrder(orderId) : null;
+  const match = orderId ? (currentRun.matches || []).find(m => m.order_id === orderId) : null;
+  const exceptionsFor = orderId
+    ? (currentRun.exceptions || []).filter(e => e.order_id === orderId)
+    : (currentRun.exceptions || []).filter(e => e.bank_line_id === bankLineId);
+
+  const settlement = match
+    ? findSettlementById(match.settlement_id)
+    : (exceptionsFor.find(e => e.settlement_id) ? findSettlementById(exceptionsFor.find(e => e.settlement_id).settlement_id)
+       : (order ? findSettlementsByPaymentId(order.razorpay_payment_id)[0] : null));
+  const bankLine = match ? findBankLineById(match.bank_line_id) : (bankLineId ? findBankLineById(bankLineId) : null);
+
+  $("evidence-title").textContent = orderId || bankLineId || "Evidence";
+
+  const verdictHtml = match
+    ? `<div class="evidence-verdict matched">✅ MATCHED &mdash; ${esc(match.method)}, confidence ${match.confidence}</div>`
+    : `<div class="evidence-verdict exception">⛔ ${exceptionsFor.length ? esc(exceptionsFor.map(e => e.type).join(", ")) : "NO RECORD"}</div>`;
+
+  const rows = [];
+  if (order) rows.push(["Order amount", rupees(order.amount)]);
+  if (settlement) rows.push(["Settlement amount", rupees(settlement.amount)]);
+  if (bankLine) rows.push(["Bank amount", rupees(bankLine.amount)]);
+  if (settlement) rows.push(["Settlement UTR", esc(settlement.utr)]);
+  if (bankLine) rows.push(["Bank narration", esc(bankLine.narration)]);
+  if (order && settlement) {
+    const drift = daysBetween(order.created_at, settlement.settled_at);
+    if (drift !== null) rows.push(["Date drift", `${drift} day(s)`]);
+  }
+
+  const tableHtml = rows.length
+    ? `<table class="evidence-table">${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join("")}</table>`
+    : "";
+
+  const reasoning = match ? match.note : (exceptionsFor.map(e => e.reason).join(" ") || "No reasoning recorded.");
+  const aiInvolved = match ? (match.method === "llm" ? "Yes" : (match.method === "human_override" ? "Human reviewer" : "No")) : "No (unresolved)";
+
+  // An order can be matched AND still carry a separate flagged exception
+  // (e.g. a duplicate settlement alongside its primary match) -- show
+  // both, since hiding the second half here would be exactly the kind of
+  // silent gap this project is built to avoid surfacing.
+  const alsoFlaggedHtml = (match && exceptionsFor.length)
+    ? `<div class="evidence-section-label">Also flagged</div>
+       <div class="evidence-reasoning">${exceptionsFor.map(e => `<div><span class="tag exception">${esc(e.type)}</span> ${esc(e.reason)}</div>`).join("")}</div>`
+    : "";
+
+  $("evidence-body").innerHTML = `
+    ${verdictHtml}
+    ${tableHtml}
+    <div class="evidence-section-label">AI involved?</div>
+    <div>${aiInvolved}</div>
+    ${alsoFlaggedHtml}
+    <div class="evidence-section-label">Reasoning</div>
+    <div class="evidence-reasoning">${esc(reasoning)}</div>
+  `;
+  $("evidence-overlay").style.display = "block";
+}
+
+function hideEvidence() {
+  $("evidence-overlay").style.display = "none";
+}
+
 function renderSummary(s) {
   if (typeof s.ground_truth_accuracy === "number") {
     $("c-accuracy").textContent = pct(s.ground_truth_accuracy);
@@ -329,16 +454,18 @@ function renderExceptions(exceptions) {
          </select>
          <button class="secondary manual-match-btn" data-order-id="${esc(e.order_id)}">Manually match</button>`
       : "";
+    const whyBtn = `<button class="secondary why-btn" data-order-id="${esc(e.order_id || "")}" data-bank-line-id="${esc(e.bank_line_id || "")}">Why?</button>`;
     return `
     <tr>
       <td><span class="tag exception">${esc(e.type)}</span></td>
       <td>${esc(e.order_id ?? e.bank_line_id ?? "-")}</td>
       <td>${esc(e.reason)}</td>
+      <td>${whyBtn}</td>
       <td>${reviewCell}</td>
     </tr>`;
   }).join("");
   $("exceptions-table").innerHTML = `
-    <table><thead><tr><th>Type</th><th>Entity</th><th>Reason</th><th>Review</th></tr></thead>
+    <table><thead><tr><th>Type</th><th>Entity</th><th>Reason</th><th></th><th>Review</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
 }
 
@@ -355,10 +482,11 @@ function renderMatches(matches) {
         ? `<button class="secondary accept-btn" data-order-id="${esc(m.order_id)}">Accept</button>
            <button class="secondary reject-btn" data-order-id="${esc(m.order_id)}">Reject</button>`
         : "";
-      return `<tr><td>${tagFor(m.method)}</td><td>${esc(m.order_id)}</td><td>${m.confidence}</td><td>${esc(m.note)}</td><td>${reviewCell}</td></tr>`;
+      const whyBtn = `<button class="secondary why-btn" data-order-id="${esc(m.order_id)}">Why?</button>`;
+      return `<tr><td>${tagFor(m.method)}</td><td>${esc(m.order_id)}</td><td>${m.confidence}</td><td>${esc(m.note)}</td><td>${whyBtn}</td><td>${reviewCell}</td></tr>`;
     }).join("");
     html += `<h3 style="font-size:13px;color:var(--muted);margin:14px 0 6px">${esc(method)} (${list.length})</h3>
-      <table><thead><tr><th>Method</th><th>Order</th><th>Confidence</th><th>Note</th><th>Review</th></tr></thead>
+      <table><thead><tr><th>Method</th><th>Order</th><th>Confidence</th><th>Note</th><th></th><th>Review</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
   }
   $("matches-table").innerHTML = html || '<div class="empty">No matches.</div>';
@@ -437,9 +565,13 @@ $("matches-table").addEventListener("click", (e) => {
   if (acceptBtn) { submitOverride("accept_match", acceptBtn.dataset.orderId, null, "Accepted after manual review"); return; }
   const rejectBtn = e.target.closest(".reject-btn");
   if (rejectBtn) { submitOverride("reject_match", rejectBtn.dataset.orderId, null, "Rejected after manual review"); return; }
+  const whyBtn = e.target.closest(".why-btn");
+  if (whyBtn) { showEvidence(whyBtn.dataset.orderId, null); return; }
 });
 
 $("exceptions-table").addEventListener("click", (e) => {
+  const whyBtn = e.target.closest(".why-btn");
+  if (whyBtn) { showEvidence(whyBtn.dataset.orderId || null, whyBtn.dataset.bankLineId || null); return; }
   const btn = e.target.closest(".manual-match-btn");
   if (!btn) return;
   const orderId = btn.dataset.orderId;
@@ -448,6 +580,88 @@ $("exceptions-table").addEventListener("click", (e) => {
   if (!bankLineId) { $("status").textContent = "Pick a bank line before manually matching."; return; }
   submitOverride("manual_match", orderId, bankLineId, "Manually matched by reviewer after checking bank portal");
 });
+
+$("evidence-close-btn").addEventListener("click", hideEvidence);
+$("evidence-overlay").addEventListener("click", (e) => { if (e.target.id === "evidence-overlay") hideEvidence(); });
+
+function lineChart(containerId, series, { width = 640, height = 220, yMin = 0, yMax = 1 } = {}) {
+  const pad = { l: 44, r: 16, t: 16, b: 28 };
+  const plotW = width - pad.l - pad.r, plotH = height - pad.t - pad.b;
+  const x = (i) => pad.l + (series[0].points.length <= 1 ? 0 : (i / (series[0].points.length - 1)) * plotW);
+  const y = (v) => pad.t + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
+
+  const gridLines = [0, 0.25, 0.5, 0.75, 1.0].map(f => {
+    const v = yMin + f * (yMax - yMin);
+    return `<line x1="${pad.l}" y1="${y(v)}" x2="${width - pad.r}" y2="${y(v)}" stroke="var(--border)" stroke-width="1"/>
+            <text x="${pad.l - 8}" y="${y(v) + 4}" fill="var(--muted)" font-size="10" text-anchor="end">${Math.round(v * 100)}%</text>`;
+  }).join("");
+
+  const paths = series.map(s => {
+    const pts = s.points.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+    const dots = s.points.map((v, i) => `<circle cx="${x(i)}" cy="${y(v)}" r="3" fill="${s.color}"/>`).join("");
+    return `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2"/>${dots}`;
+  }).join("");
+
+  const xLabels = series[0].points.map((_, i) => series[0].xLabels[i]).map((label, i) =>
+    `<text x="${x(i)}" y="${height - 6}" fill="var(--muted)" font-size="10" text-anchor="middle">${label}</text>`
+  ).join("");
+
+  const legend = series.map((s, i) =>
+    `<span style="color:${s.color}; margin-right:14px">&#9679; ${esc(s.label)}</span>`).join("");
+
+  $(containerId).innerHTML = `
+    <svg width="100%" viewBox="0 0 ${width} ${height}" style="max-width:${width}px">
+      ${gridLines}${paths}${xLabels}
+    </svg>
+    <div style="font-size:12px; margin-top:4px">${legend}</div>`;
+}
+
+async function runBenchmark() {
+  const n_orders = parseInt($("bench-n-orders").value, 10) || 80;
+  const corruption_rates = $("bench-rates").value.split(",").map(s => parseFloat(s.trim()) / 100).filter(v => !isNaN(v));
+  const use_llm = $("bench-use-llm").checked;
+  $("bench-run-btn").disabled = true;
+  $("bench-status").textContent = `Running ${corruption_rates.length} batches${use_llm ? " (calls the LLM -- may take a bit)" : ""}...`;
+  try {
+    const res = await fetch(`${API}/api/benchmark`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ n_orders, corruption_rates, use_llm }),
+    });
+    if (!res.ok) throw new Error(`API returned ${res.status}`);
+    const data = await res.json();
+    renderBenchmark(data);
+    $("bench-status").textContent = `Done (${data.llm_provider}).`;
+  } catch (e) {
+    $("bench-status").textContent = "Error: " + e.message;
+  } finally {
+    $("bench-run-btn").disabled = false;
+  }
+}
+
+function renderBenchmark(data) {
+  const xLabels = data.results.map(r => `${Math.round(r.corruption_rate * 100)}%`);
+  lineChart("benchmark-chart", [
+    { label: "Ground-truth accuracy", color: "#6fcf97", points: data.results.map(r => r.ground_truth_accuracy), xLabels },
+    { label: "Match rate", color: "#7aa2f7", points: data.results.map(r => r.match_rate), xLabels },
+    { label: "Amount accuracy", color: "#f2c94c", points: data.results.map(r => r.amount_accuracy), xLabels },
+  ]);
+
+  const rows = data.results.map(r => `
+    <tr>
+      <td>${Math.round(r.corruption_rate * 100)}%</td>
+      <td>${pct(r.match_rate)}</td>
+      <td>${pct(r.ground_truth_accuracy)}</td>
+      <td>${pct(r.amount_accuracy)}</td>
+      <td>${r.exception_count}</td>
+      <td>${rupees(r.false_clear_amount)}</td>
+    </tr>`).join("");
+  $("benchmark-table").innerHTML = `
+    <table><thead><tr><th>Corruption</th><th>Match rate</th><th>Ground-truth acc.</th>
+    <th>Amount acc.</th><th>Exceptions</th><th>False-clear ₹</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+$("bench-run-btn").addEventListener("click", runBenchmark);
 </script>
 </body>
 </html>

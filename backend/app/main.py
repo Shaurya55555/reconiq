@@ -42,6 +42,16 @@ def _apply_ground_truth_to_summary(summary: dict, ground_truth: dict) -> None:
     summary["safe_miss_amount"] = ground_truth["safe_miss_amount"]
 
 
+class BenchmarkRequest(BaseModel):
+    n_orders: int = 80
+    corruption_rates: list[float] = [0.1, 0.2, 0.3, 0.4, 0.5]
+    seed_base: int | None = None
+    confidence_threshold: float | None = None
+    fee_tolerance_pct: float = matcher.FEE_TOLERANCE_PCT
+    date_drift_ok_days: int = matcher.DATE_DRIFT_OK_DAYS
+    use_llm: bool = True
+
+
 class OverrideRequest(BaseModel):
     orders: list[dict]
     matches: list[dict]
@@ -101,6 +111,8 @@ def run_reconciliation(req: RunRequest):
         "run_id": run_id,
         "summary": summary,
         "orders": batch["orders"],
+        "settlements": batch["settlements"],
+        "bank_lines": batch["bank_lines"],
         "matches": final["matches"],
         "exceptions": final["exceptions"],
         "audit_trail": final["audit_trail"],
@@ -117,6 +129,39 @@ def list_runs():
     frontend never depends on it for its primary flow."""
     return [{"run_id": r["run_id"], "created_at": r["created_at"], "summary": r["summary"]}
             for r in store.list_runs()]
+
+
+@app.post("/api/benchmark")
+def benchmark(req: BenchmarkRequest):
+    """Runs the real pipeline across a range of corruption rates on freshly
+    generated batches, so the reported accuracy can be shown holding up (or
+    degrading) as data gets messier -- one run at one corruption level
+    proves nothing on its own; a curve across several does.
+    """
+    threshold = req.confidence_threshold
+    if threshold is None:
+        threshold = float(os.getenv("LLM_CONFIDENCE_THRESHOLD", matcher.DEFAULT_LLM_CONFIDENCE_THRESHOLD))
+    resolve_fn = llm_resolver.resolve if req.use_llm else None
+
+    results = []
+    for i, rate in enumerate(req.corruption_rates):
+        seed = (req.seed_base + i) if req.seed_base is not None else None
+        batch = data_gen.generate_batch(n_orders=req.n_orders, seed=seed, corruption_rate=rate)
+        rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                         fee_tolerance_pct=req.fee_tolerance_pct,
+                                         date_drift_ok_days=req.date_drift_ok_days)
+        final = matcher.apply_llm_resolutions(rule_result, resolve_fn, confidence_threshold=threshold)
+        summary = matcher.summarize(batch["orders"], final)
+        ground_truth = scoring.score_against_ground_truth(batch["orders"], final)
+        _apply_ground_truth_to_summary(summary, ground_truth)
+        results.append({"corruption_rate": rate, **summary})
+
+    return {
+        "n_orders": req.n_orders,
+        "use_llm": req.use_llm,
+        "llm_provider": os.getenv("LLM_PROVIDER", "heuristic (offline fallback)") if req.use_llm else "disabled for this benchmark",
+        "results": results,
+    }
 
 
 @app.post("/api/override")
