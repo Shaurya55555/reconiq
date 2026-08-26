@@ -10,11 +10,12 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
-  header { padding: 24px 32px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  header { padding: 24px 32px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
   header h1 { margin: 0; font-size: 20px; }
   header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
   main { max-width: 1100px; margin: 0 auto; padding: 24px 32px; }
   button { background: var(--accent); color: #04211d; border: none; padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+  button.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--border); font-weight: 500; padding: 8px 14px; }
   button:disabled { opacity: 0.5; cursor: default; }
   input[type=number], input[type=text] { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 8px 10px; border-radius: 6px; }
   .row { display: flex; gap: 12px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
@@ -24,7 +25,7 @@
   .card .value { font-size: 26px; font-weight: 700; margin-top: 6px; }
   .value.good { color: var(--good); } .value.warn { color: var(--warn); } .value.bad { color: var(--bad); }
   section { margin-bottom: 28px; }
-  h2 { font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  h2 { font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
   th { color: var(--muted); font-weight: 600; }
@@ -40,6 +41,14 @@
   #chat-log .a { background: var(--panel); border: 1px solid var(--border); }
   #status { color: var(--muted); font-size: 13px; }
   .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 700px) { .charts { grid-template-columns: 1fr; } }
+  .chart-box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12px; }
+  .bar-label { width: 130px; color: var(--muted); flex-shrink: 0; }
+  .bar-track { flex: 1; background: #0e141b; border-radius: 4px; height: 14px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; }
+  .bar-count { width: 34px; text-align: right; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -53,19 +62,45 @@
 <main>
   <div class="row">
     <label>Orders in batch: <input id="n-orders" type="number" value="70" min="10" max="500"></label>
+    <label>Seed (optional, for a reproducible batch): <input id="seed" type="number" placeholder="random"></label>
     <button id="run-btn">Run reconciliation</button>
     <span id="status"></span>
   </div>
 
   <div class="cards" id="cards" style="display:none">
+    <div class="card"><div class="label">Ground-truth accuracy</div><div class="value" id="c-accuracy">--</div></div>
     <div class="card"><div class="label">Match rate</div><div class="value" id="c-match-rate">--</div></div>
     <div class="card"><div class="label">Matched</div><div class="value" id="c-matched">--</div></div>
     <div class="card"><div class="label">Exceptions</div><div class="value" id="c-exceptions">--</div></div>
     <div class="card"><div class="label">Throughput</div><div class="value" id="c-throughput">--</div></div>
   </div>
+  <p id="accuracy-note" style="display:none; color:var(--muted); font-size:12px; margin:-16px 0 20px">
+    Ground-truth accuracy is scored against the known-correct label seeded into each synthetic order
+    (not visible to the matcher) &mdash; match rate alone only tells you volume, not correctness.
+  </p>
+
+  <section id="charts-section" style="display:none">
+    <div class="charts">
+      <div class="chart-box">
+        <h2 style="border:none;padding:0;margin-bottom:10px">Matches by method</h2>
+        <div id="chart-methods"></div>
+      </div>
+      <div class="chart-box">
+        <h2 style="border:none;padding:0;margin-bottom:10px">Exceptions by reason</h2>
+        <div id="chart-exceptions"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="misclassified-section" style="display:none">
+    <h2>Ground-truth misclassifications (scored, not cherry-picked)</h2>
+    <div id="misclassified-table"></div>
+  </section>
 
   <section id="exceptions-section" style="display:none">
-    <h2>Exception list (honest, not cherry-picked)</h2>
+    <h2>Exception list (honest, not cherry-picked)
+      <button class="secondary" id="export-exceptions-btn">Export CSV</button>
+    </h2>
     <div id="exceptions-table"></div>
   </section>
 
@@ -75,7 +110,9 @@
   </section>
 
   <section id="audit-section" style="display:none">
-    <h2>Audit trail (last 30 decisions)</h2>
+    <h2>Audit trail (last 30 decisions, most recent first)
+      <button class="secondary" id="export-audit-btn">Export CSV</button>
+    </h2>
     <div id="audit-table"></div>
   </section>
 
@@ -91,40 +128,56 @@
 
 <script>
 const API = "";
-let currentRunId = null;
+let currentRun = null; // {run_id, summary, matches, exceptions, audit_trail}
 
 const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const pct = (x) => (x * 100).toFixed(1) + "%";
+const tagFor = (method) => `<span class="tag ${esc(method)}">${esc(method)}</span>`;
 
-function pct(x) { return (x * 100).toFixed(1) + "%"; }
-
-function tagFor(method) {
-  return `<span class="tag ${method}">${method}</span>`;
-}
+const METHOD_COLORS = { exact: "#6fcf97", fuzzy: "#f2c94c", llm: "#7aa2f7" };
+const EXCEPTION_COLOR = "#f47174";
 
 async function runReconciliation() {
   const n = parseInt($("n-orders").value, 10) || 70;
+  const seedVal = $("seed").value.trim();
+  const seed = seedVal === "" ? null : parseInt(seedVal, 10);
   $("run-btn").disabled = true;
   $("status").textContent = "Generating batch and reconciling...";
   try {
     const res = await fetch(`${API}/api/run`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ n_orders: n }),
+      body: JSON.stringify({ n_orders: n, seed }),
     });
-    const data = await res.json();
-    currentRunId = data.run_id;
-    renderSummary(data.summary);
-    await Promise.all([loadRunDetail(), loadAudit()]);
-    $("status").textContent = `Run ${currentRunId} complete.`;
-    ["cards", "exceptions-section", "matches-section", "audit-section", "chat-section"]
-      .forEach((id) => $(id).style.display = "");
+    if (!res.ok) throw new Error(`API returned ${res.status}`);
+    currentRun = await res.json();
+
+    renderSummary(currentRun.summary);
+    renderMethodChart(currentRun.matches);
+    renderExceptionChart(currentRun.exceptions);
+    renderExceptions(currentRun.exceptions);
+    renderMatches(currentRun.matches);
+    renderAudit(currentRun.audit_trail);
+
+    renderMisclassified(currentRun.ground_truth);
+
+    $("status").textContent = `Run ${currentRun.run_id} complete.`;
+    const sections = ["cards", "charts-section", "exceptions-section", "matches-section", "audit-section", "chat-section"];
+    if (currentRun.ground_truth && currentRun.ground_truth.misclassified.length) sections.push("misclassified-section");
+    sections.forEach((id) => $(id).style.display = "");
   } catch (e) {
-    $("status").textContent = "Error: " + e;
+    $("status").textContent = "Error: " + e.message;
   } finally {
     $("run-btn").disabled = false;
   }
 }
 
 function renderSummary(s) {
+  if (typeof s.ground_truth_accuracy === "number") {
+    $("c-accuracy").textContent = pct(s.ground_truth_accuracy);
+    $("c-accuracy").className = "value " + (s.ground_truth_accuracy >= 0.9 ? "good" : s.ground_truth_accuracy >= 0.75 ? "warn" : "bad");
+    $("accuracy-note").style.display = "";
+  }
   $("c-match-rate").textContent = pct(s.match_rate);
   $("c-match-rate").className = "value " + (s.match_rate >= 0.9 ? "good" : s.match_rate >= 0.75 ? "warn" : "bad");
   $("c-matched").textContent = `${s.matched} / ${s.total_orders}`;
@@ -134,11 +187,28 @@ function renderSummary(s) {
   $("provider-badge").textContent = "LLM layer: " + s.llm_provider;
 }
 
-async function loadRunDetail() {
-  const res = await fetch(`${API}/api/runs/${currentRunId}`);
-  const data = await res.json();
-  renderExceptions(data.exceptions);
-  renderMatches(data.matches);
+function barChart(containerId, entries, colorFor) {
+  const max = Math.max(1, ...entries.map(([, v]) => v));
+  $(containerId).innerHTML = entries.map(([label, count]) => `
+    <div class="bar-row">
+      <div class="bar-label">${esc(label)}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${(count / max) * 100}%; background:${colorFor(label)}"></div></div>
+      <div class="bar-count">${count}</div>
+    </div>`).join("") || '<div class="empty">No data.</div>';
+}
+
+function renderMethodChart(matches) {
+  const counts = {};
+  matches.forEach(m => counts[m.method] = (counts[m.method] || 0) + 1);
+  const entries = ["exact", "fuzzy", "llm"].filter(k => counts[k]).map(k => [k, counts[k]]);
+  barChart("chart-methods", entries, (label) => METHOD_COLORS[label] || "#888");
+}
+
+function renderExceptionChart(exceptions) {
+  const counts = {};
+  exceptions.forEach(e => counts[e.type] = (counts[e.type] || 0) + 1);
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  barChart("chart-exceptions", entries, () => EXCEPTION_COLOR);
 }
 
 function renderExceptions(exceptions) {
@@ -148,9 +218,9 @@ function renderExceptions(exceptions) {
   }
   let rows = exceptions.map(e => `
     <tr>
-      <td><span class="tag exception">${e.type}</span></td>
-      <td>${e.order_id ?? e.bank_line_id ?? "-"}</td>
-      <td>${e.reason}</td>
+      <td><span class="tag exception">${esc(e.type)}</span></td>
+      <td>${esc(e.order_id ?? e.bank_line_id ?? "-")}</td>
+      <td>${esc(e.reason)}</td>
     </tr>`).join("");
   $("exceptions-table").innerHTML = `
     <table><thead><tr><th>Type</th><th>Entity</th><th>Reason</th></tr></thead>
@@ -165,48 +235,79 @@ function renderMatches(matches) {
     const list = byMethod[method] || [];
     if (!list.length) continue;
     const rows = list.slice(0, 8).map(m => `
-      <tr><td>${tagFor(m.method)}</td><td>${m.order_id}</td><td>${m.confidence}</td><td>${m.note}</td></tr>`).join("");
-    html += `<h3 style="font-size:13px;color:var(--muted);margin:14px 0 6px">${method} (${list.length})</h3>
+      <tr><td>${tagFor(m.method)}</td><td>${esc(m.order_id)}</td><td>${m.confidence}</td><td>${esc(m.note)}</td></tr>`).join("");
+    html += `<h3 style="font-size:13px;color:var(--muted);margin:14px 0 6px">${esc(method)} (${list.length})</h3>
       <table><thead><tr><th>Method</th><th>Order</th><th>Confidence</th><th>Note</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
   }
   $("matches-table").innerHTML = html || '<div class="empty">No matches.</div>';
 }
 
-async function loadAudit() {
-  const res = await fetch(`${API}/api/runs/${currentRunId}/audit`);
-  const data = await res.json();
-  const trail = data.audit_trail.slice(-30).reverse();
-  const rows = trail.map(a => `
+function renderMisclassified(groundTruth) {
+  if (!groundTruth || !groundTruth.misclassified.length) return;
+  const rows = groundTruth.misclassified.map(r => `
     <tr>
-      <td>${a.step}</td>
+      <td>${esc(r.order_id)}</td>
+      <td>${esc(r.truth)}</td>
+      <td>${esc(r.expected_outcome)}</td>
+      <td>${esc(r.actual_outcome)}${r.actual_exception_type ? ` (${esc(r.actual_exception_type)})` : ""}</td>
+    </tr>`).join("");
+  $("misclassified-table").innerHTML = `
+    <table><thead><tr><th>Order</th><th>Seeded anomaly</th><th>Expected</th><th>Actual</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+function renderAudit(trail) {
+  const recent = trail.slice(-30).reverse();
+  const rows = recent.map(a => `
+    <tr>
+      <td>${esc(a.step)}</td>
       <td>${tagFor(a.decision === "exception" ? "exception" : a.method)}</td>
       <td>${a.confidence}</td>
-      <td>${a.order_id ?? a.bank_line_id ?? "-"}</td>
-      <td>${a.note}</td>
+      <td>${esc(a.order_id ?? a.bank_line_id ?? "-")}</td>
+      <td>${esc(a.note)}</td>
     </tr>`).join("");
   $("audit-table").innerHTML = `
     <table><thead><tr><th>Step</th><th>Decision</th><th>Conf.</th><th>Entity</th><th>Note</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
 }
 
+function downloadCsv(filename, rows, columns) {
+  const header = columns.join(",");
+  const body = rows.map(r => columns.map(c => `"${String(r[c] ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([header + "\n" + body], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function askQuestion() {
   const q = $("chat-input").value.trim();
-  if (!q || !currentRunId) return;
-  $("chat-log").innerHTML += `<div class="msg q"><b>You:</b> ${q}</div>`;
+  if (!q || !currentRun) return;
+  $("chat-log").innerHTML += `<div class="msg q"><b>You:</b> ${esc(q)}</div>`;
   $("chat-input").value = "";
-  const res = await fetch(`${API}/api/runs/${currentRunId}/ask`, {
+  const res = await fetch(`${API}/api/ask`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question: q }),
+    body: JSON.stringify({ question: q, summary: currentRun.summary, exceptions: currentRun.exceptions }),
   });
   const data = await res.json();
-  $("chat-log").innerHTML += `<div class="msg a"><b>ReconIQ:</b> ${data.answer}</div>`;
+  $("chat-log").innerHTML += `<div class="msg a"><b>ReconIQ:</b> ${esc(data.answer)}</div>`;
   $("chat-log").scrollTop = $("chat-log").scrollHeight;
 }
 
 $("run-btn").addEventListener("click", runReconciliation);
 $("chat-btn").addEventListener("click", askQuestion);
 $("chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") askQuestion(); });
+$("export-exceptions-btn").addEventListener("click", () => {
+  if (!currentRun) return;
+  downloadCsv("reconiq_exceptions.csv", currentRun.exceptions, ["type", "order_id", "settlement_id", "bank_line_id", "reason"]);
+});
+$("export-audit-btn").addEventListener("click", () => {
+  if (!currentRun) return;
+  downloadCsv("reconiq_audit_trail.csv", currentRun.audit_trail, ["step", "decision", "method", "confidence", "order_id", "bank_line_id", "note"]);
+});
 </script>
 </body>
 </html>

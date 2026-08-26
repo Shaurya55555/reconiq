@@ -5,13 +5,13 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import data_gen, llm_resolver, matcher, store
+from . import data_gen, llm_resolver, matcher, scoring, store
 
 load_dotenv()
 
@@ -24,63 +24,67 @@ FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 class RunRequest(BaseModel):
     n_orders: int = 70
     seed: int | None = None
+    confidence_threshold: float | None = None
 
 
 class AskRequest(BaseModel):
     question: str
+    summary: dict
+    exceptions: list[dict]
 
 
 @app.post("/api/run")
 def run_reconciliation(req: RunRequest):
+    """Stateless by design: the full result is returned in one response so
+    the frontend never needs a follow-up lookup by run_id. This is what
+    lets the same code run identically on a long-lived uvicorn process
+    and on a cold-starting serverless function with no shared memory
+    between invocations -- there's nothing to share.
+    """
+    threshold = req.confidence_threshold
+    if threshold is None:
+        threshold = float(os.getenv("LLM_CONFIDENCE_THRESHOLD", matcher.DEFAULT_LLM_CONFIDENCE_THRESHOLD))
+
     t0 = time.perf_counter()
     batch = data_gen.generate_batch(n_orders=req.n_orders, seed=req.seed)
     rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"])
-    final = matcher.apply_llm_resolutions(rule_result, llm_resolver.resolve)
+    final = matcher.apply_llm_resolutions(rule_result, llm_resolver.resolve, confidence_threshold=threshold)
     elapsed = time.perf_counter() - t0
 
     summary = matcher.summarize(batch["orders"], final)
     summary["throughput_records_per_sec"] = round(req.n_orders / elapsed, 1) if elapsed > 0 else None
     summary["elapsed_seconds"] = round(elapsed, 3)
     summary["llm_provider"] = os.getenv("LLM_PROVIDER", "heuristic (offline fallback)")
+    summary["confidence_threshold"] = threshold
 
-    run_id = store.new_run({
-        "batch": batch, "result": final, "summary": summary,
-        "n_orders": req.n_orders,
-    })
-    return {"run_id": run_id, "summary": summary}
+    ground_truth = scoring.score_against_ground_truth(batch["orders"], final)
+    summary["ground_truth_accuracy"] = ground_truth["ground_truth_accuracy"]
+
+    run_id = store.new_run({"summary": summary, "n_orders": req.n_orders})
+
+    return {
+        "run_id": run_id,
+        "summary": summary,
+        "matches": final["matches"],
+        "exceptions": final["exceptions"],
+        "audit_trail": final["audit_trail"],
+        "ground_truth": ground_truth,
+    }
 
 
 @app.get("/api/runs")
 def list_runs():
+    """Best-effort local history -- populated only within a single
+    long-lived process (e.g. `uvicorn` locally). On serverless this may
+    be empty depending on which instance handles the request; the
+    frontend never depends on it for its primary flow."""
     return [{"run_id": r["run_id"], "created_at": r["created_at"], "summary": r["summary"]}
             for r in store.list_runs()]
 
 
-@app.get("/api/runs/{run_id}")
-def get_run(run_id: str):
-    run = store.get_run(run_id)
-    if not run:
-        raise HTTPException(404, "run not found")
-    return {
-        "run_id": run_id, "summary": run["summary"],
-        "matches": run["result"]["matches"], "exceptions": run["result"]["exceptions"],
-    }
-
-
-@app.get("/api/runs/{run_id}/audit")
-def get_audit(run_id: str):
-    run = store.get_run(run_id)
-    if not run:
-        raise HTTPException(404, "run not found")
-    return {"run_id": run_id, "audit_trail": run["result"]["audit_trail"]}
-
-
-@app.post("/api/runs/{run_id}/ask")
-def ask(run_id: str, req: AskRequest):
-    run = store.get_run(run_id)
-    if not run:
-        raise HTTPException(404, "run not found")
-    answer = llm_resolver.answer_question(req.question, run["summary"], run["result"]["exceptions"])
+@app.post("/api/ask")
+def ask(req: AskRequest):
+    answer = llm_resolver.answer_question(req.question, req.summary, req.exceptions)
     return {"answer": answer}
 
 
