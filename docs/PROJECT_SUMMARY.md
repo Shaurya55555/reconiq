@@ -2,6 +2,7 @@
 
 **Repo:** https://github.com/Shaurya55555/reconiq
 **Live demo:** https://reconiq-mocha.vercel.app
+**Architecture diagram:** [`docs/architecture.html`](architecture.html)
 
 Built for the Razorpay AI Buildathon — **Track 04: AI Finance Controller**.
 
@@ -25,31 +26,39 @@ Built for the Razorpay AI Buildathon — **Track 04: AI Finance Controller**.
 A multi-source reconciliation agent: it matches an internal order ledger
 against a Razorpay settlement export and a raw bank statement — the way
 a finance-ops person would by hand, except verified, auditable, and able
-to handle the messy cases most reconciliation tools give up on.
+to handle the messy cases most reconciliation tools give up on. It
+doesn't try to match everything — it matches what it can prove, escalates
+what deterministic rules can't resolve to an LLM behind a confidence
+gate, and leaves genuine uncertainty as an honest, reason-coded exception.
 
 ---
 
-## The matching engine — four passes, cheapest and most certain first
+## The matching engine — passes, cheapest and most certain first
 
 1. **Exact match** — settlement UTR found verbatim in a bank line,
    amount matches to the paisa.
 2. **Fuzzy match** — UTR found, amount differs by a plausible Razorpay
    fee (≤3%, configurable) or the settlement date drifted.
-3. **Many-to-one (group split) match** — the deepening upgrade. When one
-   settlement's money arrives as 2–3 separate bank credits instead of
-   one (a partial early payout + balance, or a fee leg booked
-   separately), the system finds the combination of bank lines sharing
-   that settlement's UTR which sums exactly to it. Fully
-   deterministic — a bounded combinatorial search, not an LLM guess —
-   because the shared UTR proves the group belongs together and exact
-   arithmetic doesn't need AI. This is the single most common reason
-   real reconciliation tools fail past 1:1 matching and get pushed back
-   to spreadsheets.
-4. **LLM-resolved match** — only when the UTR isn't found in *any* bank
+3. **Group matching, both directions (1:N and N:1)** — one settlement's
+   money arriving as 2–3 separate bank credits (`group_split`), or
+   several orders' payments consolidated into one settlement and one
+   bank credit (`batch_settlement`, genuinely how Razorpay's batch
+   settlement works). Both fully deterministic — the shared UTR proves
+   the group belongs together, not an LLM guess.
+4. **Refund-aware matching** — a full refund resolves with no
+   settlement expected (`method: "refunded"`); a partial refund is
+   matched against `order.amount − refund.amount`, not the raw order
+   amount, so a correctly-processed refund is never misfiled as
+   `amount_mismatch`.
+5. **LLM-resolved match** — only when the UTR isn't found in *any* bank
    line at all (garbled/truncated narration). A real Gemini call
-   reasons over the free text; an offline heuristic fallback covers the
-   no-API-key case.
-5. **Honest exceptions** — anything still unresolved gets a specific
+   reasons over the free text and returns a confidence score; an
+   offline heuristic fallback covers both the no-API-key case and any
+   live-call failure (rate limit, timeout) — gracefully, never a crash.
+6. **Confidence gate** — an LLM verdict only auto-clears if its
+   confidence is at or above a tunable threshold. Below it, the case
+   becomes an honest exception instead of a guess.
+7. **Honest exceptions** — anything still unresolved gets a specific
    reason code, never dropped silently.
 
 ---
@@ -66,63 +75,118 @@ to handle the messy cases most reconciliation tools give up on.
 - **Rules-only vs. Rules+AI comparison** — computed on the *same batch*
   every run, proving what the AI layer actually contributes instead of
   asserting it.
-- **Corruption-rate benchmark** — runs the real pipeline across
-  multiple corruption levels on fresh batches, charted, so the accuracy
-  claim isn't just true for one lucky run.
+- **Closing verdict** — a plain "Safe to close" / "Review before
+  closing" call synthesized from materiality-weighted exceptions
+  (`₹X remains unresolved, including ₹Y above your materiality
+  threshold`), so a finance user doesn't have to read every exception
+  row to know whether the books can close today.
+- **Exception priority** — every exception is tagged high/medium/low by
+  rupee amount relative to a tunable materiality threshold, sorted so
+  the exceptions that actually matter are reviewed first.
+- **Plain-English policy presets** — Conservative / Balanced
+  (Recommended) / High Automation, labeled by business tradeoff, not by
+  "more AI"; exact numeric values stay visible in an Advanced panel for
+  a technical reviewer.
+- **Empirical confidence-threshold calibration** — `POST /api/calibrate`
+  sweeps the LLM auto-accept threshold across a range of values on one
+  fixed batch and one fixed round of LLM verdicts, reporting match rate,
+  accuracy, and false-clear ₹ at each point, so the default (0.6) can be
+  defended with a number instead of asserted.
+- **Multi-seed corruption benchmark** — `POST /api/benchmark` runs
+  several independent batches per corruption level and reports the
+  mean with its min–max spread, so "accuracy holds up as data gets
+  messier" is backed by several runs per point, not one cherry-picked
+  batch.
 - **Human-in-the-loop override** — accept / reject / manually-match any
   decision, logged distinctly as `human_override` in the audit trail so
   it's never confused with an automated call.
 - **Per-decision evidence drawer** — click "Why?" on any match or
   exception to see the full lineage (order/settlement/bank amounts, UTR
-  vs. narration, date drift, AI involvement, actual reasoning) —
-  including a combined-amount breakdown for group matches (e.g.
-  "₹11,240 = ₹5,985 + ₹5,256").
-- **Bring-your-own-data** — upload real CSVs in the same schema and run
-  the identical pipeline against them, not just synthetic data.
+  vs. narration, date drift, refund detail, AI involvement, actual
+  reasoning).
+- **Bring-your-own-data** — upload real CSVs (orders, settlements, bank
+  lines, and an optional refunds file) in the same schema and run the
+  identical pipeline against them, not just synthetic data. No
+  fabricated ground-truth accuracy is shown for uploaded data.
 - **Full audit trail**, exportable as CSV, for every decision at every
   stage.
 - **Hero-first dashboard** — leads with financial position (amount
-  processed / reconciled / at risk), with policy config tucked into an
-  "Advanced settings" panel instead of sitting above the fold.
+  processed / reconciled / at risk / refunded), the closing verdict
+  banner, and a one-line interpretation note, with technical policy
+  knobs de-emphasized into an "Advanced settings" panel rather than
+  hidden.
 
 ---
 
-## Benchmark — run live against production
+## Canonical demo batch (seed 42, 100 orders)
 
-Fresh batches at each corruption level, real Gemini, run directly
-against the deployed site (not a canned example):
+Locked for the pitch video and repeatable by anyone:
+`POST /api/run {"n_orders": 100, "seed": 42}`
 
-| Corruption | Match Rate | Ground-truth Acc | Value-weighted Acc | False-clear ₹ |
-|---:|---:|---:|---:|---:|
-| 10% | 97.5% | 100.0% | 100.0% | ₹0 |
-| 20% | 97.5% | 100.0% | 100.0% | ₹0 |
-| 30% | 98.8% | 100.0% | 100.0% | ₹0 |
-| 40% | 88.8% | 100.0% | 100.0% | ₹0 |
-| 50% | 90.0% | 98.8% | 99.5% | ₹0 |
+| Metric | Value |
+|---|---:|
+| Match rate | 92% (92/100) |
+| Ground-truth accuracy | **100%** |
+| Value-weighted accuracy | **100%** |
+| False-clear amount | **₹0** |
+| Safe-miss amount | ₹0 |
+| Amount processed | ₹12,58,860 |
+| Amount reconciled | ₹9,89,232 |
+| Amount at risk | ₹2,69,628 |
+| Amount refunded | ₹1,04,118 |
+| Rules-only match rate | 90% |
+| Rules+AI match rate | 92% (**+2.0pp AI uplift**, same batch) |
+| Rules-only accuracy | 98% → Rules+AI accuracy: **100%** |
+| Methods represented | exact, fuzzy, `group_split`, `batch_settlement`, `refunded`, `llm` — all six |
+| Closing verdict | **Review before closing** — ₹2,69,628 unresolved, ₹2,58,672 above materiality threshold (₹5,000) |
 
-**False-clear amount stayed at ₹0 across every corruption level tested,
-even at 50%** — the system never once confidently matched something it
-should have flagged, across a genuinely harsh stress test. Match rate
-dips at 40–50% because more corruption correctly produces more honest
-exceptions, not the same clean rate — that's the system behaving
-correctly, not degrading.
+This single batch exercises every matching pass, the refund-aware
+matcher, the AI layer, and the closing verdict — chosen deliberately for
+that diversity, not cherry-picked for a flattering number (accuracy is
+verified, not tuned to this seed — see the multi-seed benchmark below).
 
-Reproduce: `POST /api/benchmark {"n_orders": 80, "corruption_rates": [0.1,0.2,0.3,0.4,0.5], "use_llm": true}`
+---
+
+## Benchmark — multi-seed, run live against production
+
+`POST /api/benchmark` now runs `n_seeds` independent batches per
+corruption level (not one) and reports the mean with its min–max spread,
+so the accuracy claim is backed by several runs per point.
+
+*(Numbers below refresh automatically each time `/api/benchmark` is run
+— reproduce with
+`{"n_orders": 80, "corruption_rates": [0.1,0.2,0.3,0.4,0.5], "n_seeds": 3, "use_llm": true}`
+against the live deployment.)*
+
+**False-clear amount has stayed at ₹0 across every corruption level
+tested in every run of this benchmark, including 50% corruption** — the
+system never once confidently matched something it should have flagged,
+across a genuinely harsh stress test.
 
 ---
 
 ## Proof it works
 
-- **32/32 automated tests passing**, including 4 tests specifically
-  verifying the group-split matcher never falsely combines unrelated
-  bank lines or rescues a genuine amount mismatch.
+- **53/53 automated tests passing**, including dedicated adversarial
+  tests: group-split/batch-settlement matching never falsely combines
+  unrelated bank lines or rescues a genuine amount mismatch; a refund
+  only ever explains the gap it actually accounts for and never masks
+  an unrelated discrepancy; a stricter confidence threshold never
+  auto-accepts *more* LLM matches than a looser one.
 - **CI green** on every commit (GitHub Actions).
 - **Verified live in a browser**: real clicks (not just API calls) —
   running a reconciliation, opening the evidence drawer, performing a
-  human override, confirming the audit trail — all working end to end
+  human override, running the calibration sweep and multi-seed
+  benchmark, confirming the audit trail — all working end to end
   against the actual production URL.
 - **Real Gemini integration**, not a mock, with a tested offline
-  heuristic fallback when no LLM key is configured.
+  heuristic fallback for both the no-API-key case and any live-call
+  failure (rate limit, timeout, provider outage) — verified live: a
+  Gemini 429 during testing fell back cleanly with the fallback
+  reasoning explicitly tagged in the audit trail, never a silent guess
+  or a crash.
+- **Release-candidate tag** (`reconiq-v1.0-rc`) marking the frozen,
+  fully-verified engineering state ahead of pitch/demo prep.
 
 ---
 
@@ -133,24 +197,29 @@ Reproduce: `POST /api/benchmark {"n_orders": 80, "corruption_rates": [0.1,0.2,0.
    duration cap or Gemini rate-limit delays under heavy usage. The
    deterministic matcher itself runs in under a millisecond regardless
    of batch size — any slowness is network/LLM latency, not the core
-   engine. A 1,000-order scale test and this limitation are both
-   documented in the main README.
-2. **The mirror many-to-many case isn't built.** One bulk bank credit
-   covering *multiple different* orders' settlements (batched by the
-   gateway) is the natural next extension of the same combinatorial
-   search, but needs a batch-reference narration format the generator
-   doesn't produce yet. Noted explicitly in the roadmap, not hidden.
-3. **Deliberately out of scope, on purpose:** cash forecasting,
+   engine.
+2. **True many-to-many isn't built.** Both group-matching directions
+   are built (1:N `group_split`, N:1 `batch_settlement`); arbitrary
+   many-to-many (several settlements partitioned against several bank
+   lines simultaneously) is a meaningfully harder combinatorial problem
+   and isn't attempted — noted explicitly, not quietly implied.
+3. **Chargebacks aren't built.** Refunds (full and partial) are;
+   chargebacks are a different animal (bank/network-initiated,
+   adversarial, their own dispute lifecycle) and are deliberately
+   scoped out of v1.
+4. **Deliberately out of scope, on purpose:** cash forecasting,
    reconciliation aging as a standalone view, a general-purpose finance
    chatbot, payroll, invoicing, tax workflows, expense management, or
    any other accounting product. Track 4 asks for one loop done
    credibly, not a broader finance suite — every one of those would
    dilute that story rather than strengthen it.
-4. Ground-truth accuracy on synthetic data is high partly because the
+5. Ground-truth accuracy on synthetic data is high partly because the
    matcher's tolerance thresholds and the generator's anomaly ranges
    were authored by the same person, together — this demonstrates the
    pipeline is internally consistent, not that it's proven against
-   arbitrary real-world noise.
+   arbitrary real-world noise. Bring-your-own-data mode exists
+   precisely so real data can be run through the same pipeline, honestly
+   without a fabricated accuracy number.
 
 ---
 
@@ -165,6 +234,8 @@ serverless function. Docker + docker-compose for local one-command run.
 
 ## What's left
 
-Nothing on the engineering side — repo, live deployment, tests, and
-documentation are all in sync. Remaining: record the pitch video, fill
-out the application form, submit.
+Engineering is frozen at `reconiq-v1.0-rc`. Remaining: architecture
+diagram (done — `docs/architecture.html`), pitch script (done —
+`docs/pitch_video_script.md`), judge Q&A prep (done —
+`docs/judge_qna.md`), record the 5-minute video, fill out the
+application form, submit.

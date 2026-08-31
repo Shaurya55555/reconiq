@@ -8,3 +8,6 @@ node_modules/
 
 .vercel
 .env*
+
+# Private judge Q&A prep -- not for the public repo
+docs/judge_qna.md

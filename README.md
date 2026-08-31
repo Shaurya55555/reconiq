@@ -4,6 +4,7 @@ A multi-source reconciliation agent for the Razorpay AI Buildathon —
 **Track 04: AI Finance Controller**.
 
 **Live demo:** https://reconiq-mocha.vercel.app · **Repo:** https://github.com/Shaurya55555/reconiq
+**Architecture:** [`docs/architecture.html`](docs/architecture.html) · **Project summary:** [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md)
 
 ![Dashboard summary: ground-truth accuracy, match rate, amount reconciled/at-risk, money-weighted accuracy](docs/images/dashboard-summary.jpg)
 
@@ -320,14 +321,42 @@ narration rather than propose a low-confidence match — an honest
 
 ## Architecture
 
+A polished, standalone version of this diagram is at
+[`docs/architecture.html`](docs/architecture.html) (open in a browser).
+
+**Reconciliation pipeline** (decision flow — rules first, AI only for what's left):
+
+```mermaid
+flowchart TD
+    O[Orders] --> N[Normalize to canonical schema]
+    S[Settlements] --> N
+    B[Bank lines] --> N
+    R[Refunds - optional] --> N
+    N --> D1[Pass 1: Exact match]
+    D1 --> D2[Pass 2: Fuzzy match - fee / date drift]
+    D2 --> D3[Pass 3: Group match - 1:N and N:1]
+    D3 --> D4[Pass 4: Refund-aware match]
+    D4 -->|still unresolved| LLM[Gemini LLM resolver]
+    LLM --> GATE{Confidence >= threshold?}
+    GATE -->|yes| MATCH[MATCH - evidence recorded]
+    GATE -->|no| EXC[EXCEPTION - reason coded]
+    D1 & D2 & D3 & D4 -->|resolved| MATCH
+    MATCH --> AUDIT[Evidence and audit trail]
+    EXC --> AUDIT
+    AUDIT --> VERDICT[Closing verdict - materiality weighted]
+    AUDIT --> SCORE[Ground-truth scoring - hidden label]
+```
+
+**Code modules:**
+
 ```
 data_gen.py  --generates-->  orders, settlements, bank_lines (in-memory batch)
                                         |
                                         v
-matcher.py   --pass 1/2 (rules)-->  matches, needs_llm, exceptions
+matcher.py   --rule passes (exact/fuzzy/group/refund)-->  matches, needs_llm, exceptions
                                         |
                                         v
-llm_resolver.py --pass 3 (LLM/heuristic)--> resolved matches or final exceptions
+llm_resolver.py --LLM/heuristic + confidence gate--> resolved matches or final exceptions
                                         |
                                         v
 scoring.py   --grades matches/exceptions against each order's seeded truth-->
