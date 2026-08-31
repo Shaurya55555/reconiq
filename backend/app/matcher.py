@@ -294,6 +294,23 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
 DEFAULT_LLM_CONFIDENCE_THRESHOLD = 0.6
 
 
+def resolve_llm_verdicts(rule_result: dict, llm_resolve_fn) -> list[tuple[dict, dict | None]]:
+    """Call the LLM resolver exactly once per rule-deferred case, independent
+    of the accept/reject confidence threshold. Split out from
+    apply_llm_resolutions so a calibration sweep across many threshold
+    values (see /api/calibrate) can reuse one round of LLM calls instead of
+    repeating the same (slow, rate-limited, real-money-in-API-cost) calls
+    once per threshold it wants to evaluate.
+    """
+    unmatched_bank = {b["line_id"]: b for b in rule_result["unmatched_bank_lines"]}
+    verdicts = []
+    for case in rule_result["needs_llm"]:
+        candidates = list(unmatched_bank.values())
+        verdict = llm_resolve_fn(case, candidates) if llm_resolve_fn else None
+        verdicts.append((case, verdict))
+    return verdicts
+
+
 def apply_llm_resolutions(rule_result: dict, llm_resolve_fn,
                            confidence_threshold: float = DEFAULT_LLM_CONFIDENCE_THRESHOLD) -> dict:
     """Second pass: hand every rule-deferred case to the LLM resolver and
@@ -305,15 +322,22 @@ def apply_llm_resolutions(rule_result: dict, llm_resolve_fn,
     review, looser to auto-clear more volume) rather than it being a fixed
     constant, so it's a parameter here, not a hardcoded value.
     """
+    case_verdicts = resolve_llm_verdicts(rule_result, llm_resolve_fn)
+    return apply_confidence_threshold(rule_result, case_verdicts, confidence_threshold)
+
+
+def apply_confidence_threshold(rule_result: dict, case_verdicts: list[tuple[dict, dict | None]],
+                                confidence_threshold: float = DEFAULT_LLM_CONFIDENCE_THRESHOLD) -> dict:
+    """Apply one accept/reject bar to a set of already-computed LLM verdicts.
+    Pure and cheap (no LLM calls) -- this is what lets a calibration sweep
+    evaluate many threshold values against the same fixed verdicts.
+    """
     matches = list(rule_result["matches"])
     exceptions = list(rule_result["exceptions"])
     audit = list(rule_result["audit_trail"])
     unmatched_bank = {b["line_id"]: b for b in rule_result["unmatched_bank_lines"]}
 
-    for case in rule_result["needs_llm"]:
-        candidates = list(unmatched_bank.values())
-        verdict = llm_resolve_fn(case, candidates) if llm_resolve_fn else None
-
+    for case, verdict in case_verdicts:
         if verdict and verdict.get("bank_line_id") in unmatched_bank and verdict.get("confidence", 0) >= confidence_threshold:
             bank_hit = unmatched_bank.pop(verdict["bank_line_id"])
             matches.append({

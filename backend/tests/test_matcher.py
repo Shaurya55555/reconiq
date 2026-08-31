@@ -594,3 +594,37 @@ def test_generated_refund_and_partial_refund_orders_resolve_correctly_end_to_end
     assert partial_refund_order_ids, "expected at least one partially refunded order at this seed"
     assert refunded_order_ids <= matched_order_ids
     assert partial_refund_order_ids <= matched_order_ids
+
+
+# ---- confidence-threshold calibration plumbing ----
+
+def test_apply_llm_resolutions_matches_resolve_then_apply_threshold_split():
+    """apply_llm_resolutions must be exactly equivalent to calling
+    resolve_llm_verdicts followed by apply_confidence_threshold with the
+    same threshold -- the calibration sweep depends on this split being a
+    pure refactor, not a behavior change."""
+    batch = data_gen.generate_batch(n_orders=150, seed=17)
+    rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                     refunds=batch["refunds"])
+
+    combined = matcher.apply_llm_resolutions(rule_result, llm_resolver.resolve, confidence_threshold=0.6)
+
+    case_verdicts = matcher.resolve_llm_verdicts(rule_result, llm_resolver.resolve)
+    split = matcher.apply_confidence_threshold(rule_result, case_verdicts, confidence_threshold=0.6)
+
+    assert {m["order_id"] for m in combined["matches"]} == {m["order_id"] for m in split["matches"]}
+    assert len(combined["exceptions"]) == len(split["exceptions"])
+
+
+def test_stricter_confidence_threshold_never_accepts_more_llm_matches():
+    batch = data_gen.generate_batch(n_orders=150, seed=17)
+    rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                     refunds=batch["refunds"])
+    case_verdicts = matcher.resolve_llm_verdicts(rule_result, llm_resolver.resolve)
+
+    strict = matcher.apply_confidence_threshold(rule_result, case_verdicts, confidence_threshold=0.9)
+    lenient = matcher.apply_confidence_threshold(rule_result, case_verdicts, confidence_threshold=0.5)
+
+    strict_llm_matches = sum(1 for m in strict["matches"] if m["method"] == "llm")
+    lenient_llm_matches = sum(1 for m in lenient["matches"] if m["method"] == "llm")
+    assert strict_llm_matches <= lenient_llm_matches

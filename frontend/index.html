@@ -405,6 +405,26 @@
     <div id="benchmark-chart"></div>
     <div id="benchmark-table"></div>
   </section>
+
+  <section id="calibration-section" class="validation-section">
+    <div class="validation-eyebrow">Validation &amp; robustness</div>
+    <h2>Confidence threshold calibration</h2>
+    <p style="color:var(--muted); font-size:12px; margin-top:10px">
+      The AI confidence threshold (default 0.6) is a starting point, not an empirically justified
+      one. This sweeps the auto-accept bar across a range of values against one fixed batch and one
+      fixed round of LLM verdicts &mdash; only the accept/reject line moves &mdash; so the default can be
+      defended with a number instead of asserted.
+    </p>
+    <div class="row">
+      <label>Batch size: <input id="calib-n-orders" type="number" value="150" min="30" max="300" style="width:70px"></label>
+      <label>Thresholds: <input id="calib-thresholds" type="text" value="0.5,0.6,0.7,0.8,0.9" style="width:160px"></label>
+      <button id="calib-run-btn">Run calibration</button>
+      <span id="calib-status"></span>
+    </div>
+    <div id="calibration-chart"></div>
+    <div id="calibration-table"></div>
+    <p id="calibration-recommendation" style="color:var(--muted); font-size:12px; margin-top:10px"></p>
+  </section>
 </main>
 
 <div id="evidence-overlay">
@@ -1074,6 +1094,63 @@ function renderBenchmark(data) {
 }
 
 $("bench-run-btn").addEventListener("click", runBenchmark);
+
+async function runCalibration() {
+  const n_orders = parseInt($("calib-n-orders").value, 10) || 150;
+  const thresholds = $("calib-thresholds").value.split(",").map(s => parseFloat(s.trim())).filter(v => !isNaN(v));
+  $("calib-run-btn").disabled = true;
+  $("calib-status").textContent = `Sweeping ${thresholds.length} thresholds (one fixed batch, one round of LLM calls)...`;
+  try {
+    const res = await fetch(`${API}/api/calibrate`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ n_orders, thresholds }),
+    });
+    if (!res.ok) throw new Error(`API returned ${res.status}`);
+    const data = await res.json();
+    renderCalibration(data);
+    $("calib-status").textContent = `Done (${data.llm_provider}).`;
+  } catch (e) {
+    $("calib-status").textContent = "Error: " + e.message;
+  } finally {
+    $("calib-run-btn").disabled = false;
+  }
+}
+
+function renderCalibration(data) {
+  const xLabels = data.results.map(r => String(r.confidence_threshold));
+  lineChart("calibration-chart", [
+    { label: "Verified accuracy", color: "#6fcf97", points: data.results.map(r => r.ground_truth_accuracy), xLabels },
+    { label: "Match rate", color: "#7aa2f7", points: data.results.map(r => r.match_rate), xLabels },
+  ]);
+
+  const rows = data.results.map(r => `
+    <tr${r.confidence_threshold === data.current_default_threshold ? ' style="font-weight:700"' : ""}>
+      <td>${r.confidence_threshold}${r.confidence_threshold === data.current_default_threshold ? " (current default)" : ""}</td>
+      <td>${pct(r.match_rate)}</td>
+      <td>${pct(r.ground_truth_accuracy)}</td>
+      <td>${r.llm_cases_auto_accepted} / ${data.needs_llm_count}</td>
+      <td>${rupees(r.false_clear_amount)}</td>
+      <td>${rupees(r.safe_miss_amount)}</td>
+    </tr>`).join("");
+  $("calibration-table").innerHTML = `
+    <table><thead><tr><th>Threshold</th><th>Match rate</th><th>Verified acc.</th>
+    <th>LLM cases accepted</th><th>False-clear ₹</th><th>Safe-miss ₹</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+
+  // Recommend the loosest threshold that still keeps false-clear money at
+  // zero (maximizes coverage without ever confidently clearing a mistake);
+  // if none reach zero, fall back to whichever minimizes false-clear ₹.
+  const zeroFalseClear = data.results.filter(r => r.false_clear_amount === 0);
+  const best = zeroFalseClear.length
+    ? zeroFalseClear.reduce((a, b) => (b.match_rate > a.match_rate ? b : a))
+    : data.results.reduce((a, b) => (b.false_clear_amount < a.false_clear_amount ? b : a));
+  const note = zeroFalseClear.length
+    ? `Recommended: ${best.confidence_threshold} &mdash; the loosest threshold in this sweep that still kept false-clear money at ₹0, maximizing coverage without confidently clearing a mistake.`
+    : `No threshold in this sweep kept false-clear money at ₹0. Least-bad option: ${best.confidence_threshold} (₹${best.false_clear_amount.toLocaleString("en-IN")} false-clear) &mdash; consider a stricter sweep.`;
+  $("calibration-recommendation").innerHTML = note;
+}
+
+$("calib-run-btn").addEventListener("click", runCalibration);
 </script>
 </body>
 </html>

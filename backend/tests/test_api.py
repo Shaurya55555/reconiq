@@ -127,6 +127,24 @@ def test_benchmark_endpoint_runs_across_corruption_rates():
     assert body["results"][0]["exception_count"] <= body["results"][-1]["exception_count"]
 
 
+def test_calibrate_endpoint_sweeps_thresholds_on_one_fixed_batch():
+    res = client.post("/api/calibrate", json={
+        "n_orders": 150, "seed": 17, "thresholds": [0.5, 0.6, 0.7, 0.8, 0.9],
+    })
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body["results"]) == 5
+    # thresholds come back sorted, and a stricter bar can only auto-accept
+    # fewer (or equal) LLM cases than a looser one on the same fixed verdicts
+    thresholds = [r["confidence_threshold"] for r in body["results"]]
+    assert thresholds == sorted(thresholds)
+    accepted_counts = [r["llm_cases_auto_accepted"] for r in body["results"]]
+    assert accepted_counts == sorted(accepted_counts, reverse=True)
+    for r in body["results"]:
+        assert 0.0 <= r["ground_truth_accuracy"] <= 1.0
+        assert r["llm_cases_auto_accepted"] <= body["needs_llm_count"]
+
+
 def test_override_endpoint_returns_400_for_unknown_action():
     run = client.post("/api/run", json={"n_orders": 20, "seed": 4}).json()
     res = client.post("/api/override", json={

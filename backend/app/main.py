@@ -53,6 +53,14 @@ class BenchmarkRequest(BaseModel):
     use_llm: bool = True
 
 
+class CalibrationRequest(BaseModel):
+    n_orders: int = 150
+    seed: int | None = None
+    thresholds: list[float] = [0.5, 0.6, 0.7, 0.8, 0.9]
+    fee_tolerance_pct: float = matcher.FEE_TOLERANCE_PCT
+    date_drift_ok_days: int = matcher.DATE_DRIFT_OK_DAYS
+
+
 REQUIRED_ORDER_FIELDS = {"order_id", "amount", "razorpay_payment_id", "created_at"}
 REQUIRED_SETTLEMENT_FIELDS = {"settlement_id", "payment_id", "utr", "amount", "settled_at"}
 REQUIRED_BANK_LINE_FIELDS = {"line_id", "narration", "amount", "value_date"}
@@ -208,6 +216,54 @@ def benchmark(req: BenchmarkRequest):
         "n_orders": req.n_orders,
         "use_llm": req.use_llm,
         "llm_provider": os.getenv("LLM_PROVIDER", "heuristic (offline fallback)") if req.use_llm else "disabled for this benchmark",
+        "results": results,
+    }
+
+
+@app.post("/api/calibrate")
+def calibrate(req: CalibrationRequest):
+    """LLM_CONFIDENCE_THRESHOLD (default 0.6) has always been a reasonable
+    starting point, not an empirically justified one -- this sweeps the
+    auto-accept bar across a range of values against the same fixed batch
+    and the same fixed round of LLM verdicts, reporting coverage vs.
+    false-clear rate at each point, so the default can be defended with a
+    number instead of asserted.
+
+    Reuses one rule pass + one round of LLM calls across the whole sweep
+    (matcher.resolve_llm_verdicts / apply_confidence_threshold) -- repeating
+    the actual LLM calls once per threshold would be both slow and, on a
+    live provider, needlessly expensive.
+    """
+    threshold_env_default = float(os.getenv("LLM_CONFIDENCE_THRESHOLD", matcher.DEFAULT_LLM_CONFIDENCE_THRESHOLD))
+
+    batch = data_gen.generate_batch(n_orders=req.n_orders, seed=req.seed)
+    rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                     fee_tolerance_pct=req.fee_tolerance_pct,
+                                     date_drift_ok_days=req.date_drift_ok_days,
+                                     refunds=batch["refunds"])
+    case_verdicts = matcher.resolve_llm_verdicts(rule_result, llm_resolver.resolve)
+
+    results = []
+    for t in sorted(req.thresholds):
+        final = matcher.apply_confidence_threshold(rule_result, case_verdicts, confidence_threshold=t)
+        summary = matcher.summarize(batch["orders"], final, refunds=batch["refunds"])
+        ground_truth = scoring.score_against_ground_truth(batch["orders"], final)
+        accepted = sum(1 for _, v in case_verdicts if v and v.get("confidence", 0) >= t)
+        results.append({
+            "confidence_threshold": t,
+            "match_rate": summary["match_rate"],
+            "ground_truth_accuracy": ground_truth["ground_truth_accuracy"],
+            "amount_accuracy": ground_truth["amount_accuracy"],
+            "false_clear_amount": ground_truth["false_clear_amount"],
+            "safe_miss_amount": ground_truth["safe_miss_amount"],
+            "llm_cases_auto_accepted": accepted,
+        })
+
+    return {
+        "n_orders": req.n_orders,
+        "needs_llm_count": len(rule_result["needs_llm"]),
+        "current_default_threshold": threshold_env_default,
+        "llm_provider": os.getenv("LLM_PROVIDER", "heuristic (offline fallback)"),
         "results": results,
     }
 

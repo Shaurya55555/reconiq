@@ -437,12 +437,6 @@ serverless function.
 
 **Deepening the existing loop (the direction this would grow in):**
 
-- **Empirical confidence-threshold calibration.** `LLM_CONFIDENCE_THRESHOLD`
-  (default `0.6`) is a reasonable starting point, not an empirically
-  justified one. The right next step is a threshold sweep (0.5 → 0.9)
-  against the hidden ground truth, reporting coverage vs. false-clear
-  rate at each point, to pick a value that's actually defensible rather
-  than asserted. Not built yet — flagged rather than faked.
 - **Multi-seed corruption benchmark.** The current benchmark runs one
   batch per corruption level; averaging several seeds per level (with a
   spread, not just a mean) would make the "not cherry-picked" claim
@@ -495,6 +489,20 @@ behaves:
   doing.
 - Works for uploaded data too via an optional `refunds.csv`
   (`payment_id`, `amount`) alongside the three required files.
+
+**11. Empirical confidence-threshold calibration.** `LLM_CONFIDENCE_THRESHOLD`
+(default `0.6`) was always a reasonable starting point, not an
+empirically justified one. `POST /api/calibrate` (and the "Confidence
+threshold calibration" panel on the dashboard) sweeps the auto-accept
+bar across a range of values on one fixed batch and one fixed round of
+LLM verdicts — `matcher.resolve_llm_verdicts` calls the LLM exactly
+once per case, and `matcher.apply_confidence_threshold` re-applies the
+accept/reject bar per threshold value without re-calling the LLM, so
+the sweep doesn't repeat the slow/rate-limited/API-cost part once per
+threshold. Reports match rate, verified accuracy, and — the number that
+actually matters for the accept bar — false-clear ₹ at each threshold,
+and recommends the loosest threshold that still keeps false-clear money
+at ₹0, rather than just asserting the default is fine.
 
 **Explicitly out of scope — deliberately not built, not a gap:**
 
