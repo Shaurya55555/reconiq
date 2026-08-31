@@ -127,6 +127,23 @@ def test_benchmark_endpoint_runs_across_corruption_rates():
     assert body["results"][0]["exception_count"] <= body["results"][-1]["exception_count"]
 
 
+def test_benchmark_endpoint_averages_multiple_seeds_per_corruption_level():
+    """A single batch at one corruption rate could be a lucky or unlucky
+    draw -- this locks in that /api/benchmark now runs n_seeds independent
+    batches per rate and reports mean + spread, not one batch's numbers."""
+    res = client.post("/api/benchmark", json={
+        "n_orders": 60, "corruption_rates": [0.2], "seed_base": 5, "n_seeds": 4, "use_llm": False,
+    })
+    assert res.status_code == 200
+    body = res.json()
+    assert body["n_seeds"] == 4
+    r = body["results"][0]
+    assert r["n_seeds"] == 4
+    for key in ("match_rate", "ground_truth_accuracy", "exception_count"):
+        assert f"{key}_min" in r and f"{key}_max" in r
+        assert r[f"{key}_min"] <= r[key] <= r[f"{key}_max"]
+
+
 def test_calibrate_endpoint_sweeps_thresholds_on_one_fixed_batch():
     res = client.post("/api/calibrate", json={
         "n_orders": 150, "seed": 17, "thresholds": [0.5, 0.6, 0.7, 0.8, 0.9],

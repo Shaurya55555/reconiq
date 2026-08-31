@@ -47,10 +47,33 @@ class BenchmarkRequest(BaseModel):
     n_orders: int = 80
     corruption_rates: list[float] = [0.1, 0.2, 0.3, 0.4, 0.5]
     seed_base: int | None = None
+    n_seeds: int = 3
     confidence_threshold: float | None = None
     fee_tolerance_pct: float = matcher.FEE_TOLERANCE_PCT
     date_drift_ok_days: int = matcher.DATE_DRIFT_OK_DAYS
     use_llm: bool = True
+
+
+AGGREGATED_BENCHMARK_METRICS = (
+    "match_rate", "ground_truth_accuracy", "amount_accuracy",
+    "false_clear_amount", "safe_miss_amount", "exception_count",
+)
+
+
+def _aggregate_seed_runs(summaries: list[dict]) -> dict:
+    """A single batch at a given corruption rate proves nothing on its own
+    -- it could be a lucky (or unlucky) draw. This averages n_seeds
+    independent batches at the same rate and reports the spread (min/max)
+    alongside the mean, so "accuracy holds up as data gets messier" is a
+    claim about many runs, not one cherry-picked one.
+    """
+    agg: dict = {"total_orders": summaries[0]["total_orders"]}
+    for key in AGGREGATED_BENCHMARK_METRICS:
+        vals = [s[key] for s in summaries]
+        agg[key] = round(sum(vals) / len(vals), 4)
+        agg[f"{key}_min"] = round(min(vals), 4)
+        agg[f"{key}_max"] = round(max(vals), 4)
+    return agg
 
 
 class CalibrationRequest(BaseModel):
@@ -192,28 +215,40 @@ def benchmark(req: BenchmarkRequest):
     generated batches, so the reported accuracy can be shown holding up (or
     degrading) as data gets messier -- one run at one corruption level
     proves nothing on its own; a curve across several does.
+
+    Each corruption level runs n_seeds independent batches, not one -- a
+    single batch at a given rate could be a lucky or unlucky draw. Reported
+    figures are the mean across those seeds, with the min/max spread
+    alongside, so "accuracy holds up as data gets messier" is backed by
+    several runs per point, not a single cherry-picked one.
     """
     threshold = req.confidence_threshold
     if threshold is None:
         threshold = float(os.getenv("LLM_CONFIDENCE_THRESHOLD", matcher.DEFAULT_LLM_CONFIDENCE_THRESHOLD))
     resolve_fn = llm_resolver.resolve if req.use_llm else None
+    n_seeds = max(req.n_seeds, 1)
 
     results = []
     for i, rate in enumerate(req.corruption_rates):
-        seed = (req.seed_base + i) if req.seed_base is not None else None
-        batch = data_gen.generate_batch(n_orders=req.n_orders, seed=seed, corruption_rate=rate)
-        rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
-                                         fee_tolerance_pct=req.fee_tolerance_pct,
-                                         date_drift_ok_days=req.date_drift_ok_days,
-                                         refunds=batch["refunds"])
-        final = matcher.apply_llm_resolutions(rule_result, resolve_fn, confidence_threshold=threshold)
-        summary = matcher.summarize(batch["orders"], final, refunds=batch["refunds"])
-        ground_truth = scoring.score_against_ground_truth(batch["orders"], final)
-        _apply_ground_truth_to_summary(summary, ground_truth)
-        results.append({"corruption_rate": rate, **summary})
+        per_seed_summaries = []
+        for j in range(n_seeds):
+            seed = (req.seed_base + i * 1000 + j) if req.seed_base is not None else None
+            batch = data_gen.generate_batch(n_orders=req.n_orders, seed=seed, corruption_rate=rate)
+            rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                             fee_tolerance_pct=req.fee_tolerance_pct,
+                                             date_drift_ok_days=req.date_drift_ok_days,
+                                             refunds=batch["refunds"])
+            final = matcher.apply_llm_resolutions(rule_result, resolve_fn, confidence_threshold=threshold)
+            summary = matcher.summarize(batch["orders"], final, refunds=batch["refunds"])
+            ground_truth = scoring.score_against_ground_truth(batch["orders"], final)
+            _apply_ground_truth_to_summary(summary, ground_truth)
+            per_seed_summaries.append(summary)
+        results.append({"corruption_rate": rate, "n_seeds": n_seeds,
+                         **_aggregate_seed_runs(per_seed_summaries)})
 
     return {
         "n_orders": req.n_orders,
+        "n_seeds": n_seeds,
         "use_llm": req.use_llm,
         "llm_provider": os.getenv("LLM_PROVIDER", "heuristic (offline fallback)") if req.use_llm else "disabled for this benchmark",
         "results": results,

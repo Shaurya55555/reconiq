@@ -437,10 +437,6 @@ serverless function.
 
 **Deepening the existing loop (the direction this would grow in):**
 
-- **Multi-seed corruption benchmark.** The current benchmark runs one
-  batch per corruption level; averaging several seeds per level (with a
-  spread, not just a mean) would make the "not cherry-picked" claim
-  statistically tighter.
 - **Parallelizing LLM resolution calls.** The 1,000-order scale test
   above found the real ceiling: ~65 sequential Gemini calls take long
   enough to exceed Vercel's serverless duration cap. Batching those
@@ -503,6 +499,16 @@ threshold. Reports match rate, verified accuracy, and — the number that
 actually matters for the accept bar — false-clear ₹ at each threshold,
 and recommends the loosest threshold that still keeps false-clear money
 at ₹0, rather than just asserting the default is fine.
+
+**12. Multi-seed corruption benchmark.** The benchmark used to run one
+batch per corruption level, which proves nothing on its own — a single
+batch at a given rate could be a lucky or unlucky draw. `/api/benchmark`
+now runs `n_seeds` independent batches (default 3) per corruption level
+and reports the mean alongside the min–max spread for every metric
+(match rate, verified accuracy, value-weighted accuracy, exceptions,
+false-clear ₹), so "accuracy holds up as data gets messier" is backed
+by several runs per point, shown with their spread, not one cherry-picked
+number.
 
 **Explicitly out of scope — deliberately not built, not a gap:**
 

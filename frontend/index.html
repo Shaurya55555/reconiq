@@ -392,12 +392,14 @@
     <div class="validation-eyebrow">Validation &amp; robustness</div>
     <h2>Accuracy across corruption levels</h2>
     <p style="color:var(--muted); font-size:12px; margin-top:10px">
-      Runs fresh batches at increasing corruption rates (not the same batch shown above) so the
-      accuracy number isn't just true for one cherry-picked run.
+      Runs fresh batches at increasing corruption rates (not the same batch shown above), several
+      independent seeds per rate averaged together with the spread shown, so the accuracy number
+      isn't just true for one cherry-picked run.
     </p>
     <div class="row">
       <label>Batch size: <input id="bench-n-orders" type="number" value="80" min="20" max="300" style="width:70px"></label>
       <label>Corruption rates (%): <input id="bench-rates" type="text" value="10,20,30,40,50" style="width:160px"></label>
+      <label>Seeds per rate: <input id="bench-n-seeds" type="number" value="3" min="1" max="10" style="width:50px"></label>
       <label><input id="bench-use-llm" type="checkbox" checked> Use LLM</label>
       <button id="bench-run-btn">Run benchmark</button>
       <span id="bench-status"></span>
@@ -1043,13 +1045,14 @@ function lineChart(containerId, series, { width = 640, height = 220, yMin = 0, y
 async function runBenchmark() {
   const n_orders = parseInt($("bench-n-orders").value, 10) || 80;
   const corruption_rates = $("bench-rates").value.split(",").map(s => parseFloat(s.trim()) / 100).filter(v => !isNaN(v));
+  const n_seeds = parseInt($("bench-n-seeds").value, 10) || 3;
   const use_llm = $("bench-use-llm").checked;
   $("bench-run-btn").disabled = true;
-  $("bench-status").textContent = `Running ${corruption_rates.length} batches${use_llm ? " (calls the LLM -- may take a bit)" : ""}...`;
+  $("bench-status").textContent = `Running ${corruption_rates.length * n_seeds} batches (${n_seeds} seeds x ${corruption_rates.length} rates)${use_llm ? " -- calls the LLM, may take a bit" : ""}...`;
   try {
     const res = await fetch(`${API}/api/benchmark`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ n_orders, corruption_rates, use_llm }),
+      body: JSON.stringify({ n_orders, corruption_rates, n_seeds, use_llm }),
     });
     if (!res.ok) throw new Error(`API returned ${res.status}`);
     const data = await res.json();
@@ -1070,6 +1073,11 @@ function dataQualityLabel(rate) {
   return "Severe";
 }
 
+function pctWithSpread(mean, min, max) {
+  if (min === undefined || max === undefined || min === max) return pct(mean);
+  return `${pct(mean)} <span style="color:var(--muted);font-size:10px">(${pct(min)}–${pct(max)})</span>`;
+}
+
 function renderBenchmark(data) {
   const xLabels = data.results.map(r => `${dataQualityLabel(r.corruption_rate)} (${Math.round(r.corruption_rate * 100)}%)`);
   lineChart("benchmark-chart", [
@@ -1081,13 +1089,17 @@ function renderBenchmark(data) {
   const rows = data.results.map(r => `
     <tr>
       <td>${dataQualityLabel(r.corruption_rate)} <span style="color:var(--muted)">(${Math.round(r.corruption_rate * 100)}%)</span></td>
-      <td>${pct(r.match_rate)}</td>
-      <td>${pct(r.ground_truth_accuracy)}</td>
-      <td>${pct(r.amount_accuracy)}</td>
-      <td>${r.exception_count}</td>
-      <td>${rupees(r.false_clear_amount)}</td>
+      <td>${pctWithSpread(r.match_rate, r.match_rate_min, r.match_rate_max)}</td>
+      <td>${pctWithSpread(r.ground_truth_accuracy, r.ground_truth_accuracy_min, r.ground_truth_accuracy_max)}</td>
+      <td>${pctWithSpread(r.amount_accuracy, r.amount_accuracy_min, r.amount_accuracy_max)}</td>
+      <td>${r.exception_count.toFixed(1)} <span style="color:var(--muted);font-size:10px">(${r.exception_count_min}–${r.exception_count_max})</span></td>
+      <td>${rupees(r.false_clear_amount)}${r.false_clear_amount_max ? ` <span style="color:var(--muted);font-size:10px">(max ${rupees(r.false_clear_amount_max)})</span>` : ""}</td>
     </tr>`).join("");
   $("benchmark-table").innerHTML = `
+    <p style="color:var(--muted); font-size:12px; margin:0 0 10px">
+      Each row averages ${data.n_seeds} independent batch${data.n_seeds === 1 ? "" : "es"} (seeds) at
+      that corruption level; range shown in parentheses is min&ndash;max across those seeds.
+    </p>
     <table><thead><tr><th>Data quality</th><th>Match rate</th><th>Verified acc.</th>
     <th>Value-weighted acc.</th><th>Exceptions</th><th>False-clear ₹</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
