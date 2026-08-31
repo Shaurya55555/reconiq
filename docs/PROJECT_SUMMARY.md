@@ -167,7 +167,7 @@ across a genuinely harsh stress test.
 
 ## Proof it works
 
-- **53/53 automated tests passing**, including dedicated adversarial
+- **57/57 automated tests passing**, including dedicated adversarial
   tests: group-split/batch-settlement matching never falsely combines
   unrelated bank lines or rescues a genuine amount mismatch; a refund
   only ever explains the gap it actually accounts for and never masks
@@ -220,6 +220,23 @@ across a genuinely harsh stress test.
    arbitrary real-world noise. Bring-your-own-data mode exists
    precisely so real data can be run through the same pipeline, honestly
    without a fabricated accuracy number.
+
+---
+
+## Offline Razorpay Settlement API adapter
+
+`backend/scripts/fetch_razorpay_settlements.py` fetches real settlement
+data from Razorpay's Settlement Recon Details API and normalizes it into
+the same schema the bring-your-own-data upload already accepts — proof
+the engine consumes real Razorpay data, not just synthetic. Deliberately
+an offline script, not a live "Connect Razorpay" button in the deployed
+app: no external network dependency in the judging path, no live
+credentials in production. Isolated from the reconciliation engine by
+design (authenticate → fetch → paginate → normalize → write CSV only,
+never imports `matcher.py`), with 4 dedicated unit tests covering
+single-payment settlements, multi-payment settlements (written out
+explicitly with a warning, never silently dropped), refund/transfer-row
+exclusion, and paise-to-rupee conversion. See the README for usage.
 
 ---
 

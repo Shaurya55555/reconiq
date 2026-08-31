@@ -11,3 +11,7 @@ node_modules/
 
 # Private judge Q&A prep -- not for the public repo
 docs/judge_qna.md
+
+# Output of the offline Razorpay adapter script -- may contain real
+# settlement data if run against live/test account data
+razorpay_export/

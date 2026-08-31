@@ -443,6 +443,47 @@ such a group, and added
 `test_duplicate_payment_id_across_orders_is_an_explicit_exception_not_a_silent_drop`
 to keep it caught.
 
+## Offline Razorpay Settlement API adapter
+
+`backend/scripts/fetch_razorpay_settlements.py` fetches real settlement
+data from Razorpay's Settlement Recon Details API and normalizes it into
+the same `settlements.csv` schema the bring-your-own-data upload path
+already accepts — a credibility layer proving the engine can consume
+real Razorpay data, not a replacement for the synthetic evaluation mode.
+
+**Deliberately not a live "Connect Razorpay" button in the deployed
+app.** Run it offline, once, before a demo:
+
+```bash
+export RAZORPAY_KEY_ID=rzp_test_...      # Test Mode keys, never Live
+export RAZORPAY_KEY_SECRET=...           # never commit, never print
+python backend/scripts/fetch_razorpay_settlements.py --year 2026 --month 8
+# writes razorpay_export/settlements.csv
+```
+
+Then upload that file (alongside your own `orders.csv` and
+`bank_lines.csv`) through the dashboard's "Bring your own data" panel, or
+`POST /api/run-upload` directly — the exact same pipeline that runs on
+synthetic data runs on this.
+
+**Isolation is deliberate:** the script only does
+`authenticate -> fetch -> paginate -> normalize -> write CSV`. It never
+imports `matcher.py`, contains no reconciliation logic, and is never
+imported by the FastAPI app — a build/config problem in this script
+can't break the deployed reconciliation engine.
+
+**Stated limitation, not hidden:** a single Razorpay settlement can
+legitimately cover more than one payment (a real batch settlement — the
+same case `matcher.py`'s `batch_settlement` pass already models for
+synthetic data). The CSV upload schema accepts one `payment_id` per
+settlement row, not a `payment_ids` list, so a multi-payment settlement
+can't yet be losslessly represented as one row. The script never drops
+that money silently: it writes one row per payment (sharing the
+settlement's `settlement_id`/UTR) and prints an explicit warning naming
+which settlements were split this way. Extending the upload schema to
+accept a `payment_ids` column is the natural next step, not attempted
+here to keep this script's blast radius to fetch-and-normalize only.
+
 ## Stack
 
 Python / FastAPI backend, no database (in-memory run store for local
