@@ -454,17 +454,19 @@ def closing_verdict(classified_exceptions: list[dict],
     """
     material = [e for e in classified_exceptions if e["priority"] == "high"]
     material_amount = round(sum(e["amount"] for e in material), 2)
+    total_amount = round(sum(e["amount"] for e in classified_exceptions), 2)
     can_close = len(material) == 0
     if can_close:
-        message = "No material unresolved discrepancies. Safe to close."
+        message = "No material reconciliation discrepancies remain."
     else:
-        message = (f"{len(material)} material exception(s) totaling "
-                   f"₹{material_amount:,.0f} remain unresolved "
-                   f"(materiality threshold: ₹{materiality_threshold:,.0f}).")
+        message = (f"₹{total_amount:,.0f} remains unresolved, including "
+                   f"₹{material_amount:,.0f} above your materiality threshold "
+                   f"(₹{materiality_threshold:,.0f}).")
     return {
         "can_close": can_close,
         "materiality_threshold": materiality_threshold,
         "material_exception_count": len(material),
         "material_exception_amount": material_amount,
+        "total_exception_amount": total_amount,
         "message": message,
     }

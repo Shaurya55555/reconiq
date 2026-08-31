@@ -147,6 +147,10 @@
   .policy-btn.active { border-color: var(--accent); background: var(--accent-dim); }
   .policy-btn-title { font-weight: 700; font-size: 13px; color: var(--text); }
   .policy-btn-sub { font-size: 11px; color: var(--muted); }
+  .policy-exact-values { margin-top: 10px; text-align: center; }
+  .policy-exact-values summary { font-size: 12px; color: var(--muted); cursor: pointer; }
+  .policy-exact-values p { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+  .policy-exact-values span { color: var(--text); font-weight: 600; }
 
   /* Closing verdict */
   .verdict-banner {
@@ -214,17 +218,23 @@
       <div class="policy-options">
         <button type="button" class="policy-btn" data-preset="conservative">
           <span class="policy-btn-title">Conservative</span>
-          <span class="policy-btn-sub">Fewer automatic matches, safer</span>
+          <span class="policy-btn-sub">Minimizes risky automatic matches</span>
         </button>
         <button type="button" class="policy-btn active" data-preset="balanced">
-          <span class="policy-btn-title">Balanced</span>
-          <span class="policy-btn-sub">Recommended for most reconciliations</span>
+          <span class="policy-btn-title">Balanced (Recommended)</span>
+          <span class="policy-btn-sub">Good coverage while keeping verification strict</span>
         </button>
         <button type="button" class="policy-btn" data-preset="automatic">
-          <span class="policy-btn-title">Automatic</span>
-          <span class="policy-btn-sub">Clears more automatically</span>
+          <span class="policy-btn-title">High Automation</span>
+          <span class="policy-btn-sub">Resolves more cases automatically, with higher tolerance for ambiguity</span>
         </button>
       </div>
+      <details class="policy-exact-values" id="policy-exact-values">
+        <summary>Show exact values</summary>
+        <p>AI confidence: <span id="policy-exact-confidence">0.60</span> &middot;
+           Fee tolerance: <span id="policy-exact-fee">3</span>% &middot;
+           Date drift: <span id="policy-exact-drift">3</span> days</p>
+      </details>
     </div>
 
     <div id="status"><span class="spinner" id="run-spinner"></span><span id="status-text"></span></div>
@@ -283,6 +293,8 @@
       <div class="verdict-message" id="verdict-message"></div>
     </div>
   </div>
+
+  <p id="interpretation-note" style="color:var(--muted); font-size:13px; margin:-14px 0 22px"></p>
 
   <div class="cards-group-label">Financial position</div>
   <div class="cards" id="amount-cards" style="display:none">
@@ -565,7 +577,7 @@ function renderVerdict(verdict) {
   const banner = $("verdict-banner");
   banner.className = "verdict-banner " + (verdict.can_close ? "can-close" : "cannot-close");
   $("verdict-icon").textContent = verdict.can_close ? "✅" : "⚠️";
-  $("verdict-title").textContent = verdict.can_close ? "Safe to close" : "Cannot close";
+  $("verdict-title").textContent = verdict.can_close ? "Safe to close" : "Review before closing";
   $("verdict-message").textContent = verdict.message;
   banner.style.display = "flex";
 }
@@ -582,6 +594,9 @@ function applyPolicyPreset(name) {
   $("confidence-threshold").value = p.confidence_threshold;
   $("fee-tolerance").value = p.fee_tolerance;
   $("date-drift").value = p.date_drift;
+  $("policy-exact-confidence").textContent = p.confidence_threshold.toFixed(2);
+  $("policy-exact-fee").textContent = p.fee_tolerance;
+  $("policy-exact-drift").textContent = p.date_drift;
   document.querySelectorAll(".policy-btn").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.preset === name);
   });
@@ -733,6 +748,9 @@ function renderSummary(s) {
   }
   $("c-match-rate").textContent = pct(s.match_rate);
   $("c-match-rate").className = "value " + (s.match_rate >= 0.9 ? "good" : s.match_rate >= 0.75 ? "warn" : "bad");
+  $("interpretation-note").textContent =
+    `${pct(s.match_rate)} matched doesn't mean ${pct(s.match_rate)} of your money is safe. ` +
+    `Review the amount-at-risk and material exceptions below.`;
   $("c-matched").textContent = `${s.matched} / ${s.total_orders}`;
   $("c-exceptions").textContent = s.exception_count;
   $("c-exceptions").className = "value " + (s.exception_count === 0 ? "good" : "warn");
@@ -796,9 +814,11 @@ function renderExceptions(exceptions) {
     (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3) || (b.amount ?? 0) - (a.amount ?? 0));
 
   const highCount = sorted.filter(e => e.priority === "high").length;
+  const top = sorted[0];
   const summaryLine = highCount
-    ? `<p style="color:var(--muted);font-size:12px;margin:-4px 0 14px">Sorted by priority &mdash;
-        <strong style="color:var(--bad)">${highCount} high-priority</strong> exception(s) shown first. Review those before closing.</p>`
+    ? `<p style="color:var(--muted);font-size:12px;margin:-4px 0 14px">
+        <strong style="color:var(--bad)">Review first &mdash; ${rupees(top.amount)} ${esc(top.type.replace(/_/g, " "))}</strong>
+        &mdash; ${highCount} material exception(s) shown first, sorted by priority then amount.</p>`
     : `<p style="color:var(--muted);font-size:12px;margin:-4px 0 14px">No high-priority exceptions in this batch.</p>`;
 
   let rows = sorted.map(e => {

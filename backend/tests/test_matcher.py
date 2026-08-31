@@ -461,6 +461,8 @@ def test_closing_verdict_blocks_close_when_material_exceptions_exist():
     assert verdict["can_close"] is False
     assert verdict["material_exception_count"] == 1
     assert verdict["material_exception_amount"] == 50000.0
+    assert verdict["total_exception_amount"] == 50100.0
+    assert "50,100" in verdict["message"] and "50,000" in verdict["message"]
 
 
 def test_closing_verdict_allows_close_when_only_non_material_exceptions_exist():
@@ -473,4 +475,4 @@ def test_closing_verdict_allows_close_when_only_non_material_exceptions_exist():
 def test_closing_verdict_allows_close_with_zero_exceptions():
     verdict = matcher.closing_verdict([], materiality_threshold=5000.0)
     assert verdict["can_close"] is True
-    assert "safe to close" in verdict["message"].lower()
+    assert "no material" in verdict["message"].lower()

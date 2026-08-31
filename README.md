@@ -68,18 +68,27 @@ ReconIQ closes that loop automatically on a batch of orders:
    exception is tagged with an amount-based `priority` (`high` /
    `medium` / `low`, relative to a tunable `materiality_threshold`, ₹5,000
    by default), and a `closing_verdict` synthesizes those into a single
-   "Safe to close" / "Cannot close" call plus the total ₹ still
-   unresolved. A finance controller doesn't need to read 40 exception
-   rows to know whether the books can close today — the verdict banner at
-   the top of the dashboard answers that directly. This is pure
-   synthesis over already-computed data (no new matching logic, no new
-   risk); it exists because the end user is a financer, not an engineer,
-   and "can I close the books" is the actual question they're asking.
+   "Safe to close" / "Review before closing" call plus the total ₹ still
+   unresolved and how much of that is material. A finance controller
+   doesn't need to read 40 exception rows to know whether the books can
+   close today — the verdict banner at the top of the dashboard answers
+   that directly, in plain language ("₹1,54,587 remains unresolved,
+   including ₹1,54,587 above your materiality threshold"), not a bare
+   "Cannot close". This is pure synthesis over already-computed data (no
+   new matching logic, no new risk); it exists because the end user is a
+   financer, not an engineer, and "can I close the books" is the actual
+   question they're asking. A one-line interpretation note under the
+   banner ("94% matched doesn't mean 94% of your money is safe...")
+   heads off the single most likely misreading of the metrics.
 9. **Plain-English policy presets.** The three numeric matching knobs
    (`confidence_threshold`, `fee_tolerance_pct`, `date_drift_ok_days`)
-   are exposed to non-technical users as three named presets —
-   Conservative / Balanced / Automatic — instead of requiring someone
-   who's never heard of a confidence threshold to guess at 0.6 vs. 0.8.
+   are exposed to non-technical users as three named presets, labeled by
+   business tradeoff rather than by how much AI they use — Conservative
+   ("minimizes risky automatic matches"), Balanced/Recommended ("good
+   coverage while keeping verification strict"), and High Automation
+   ("resolves more cases automatically, with higher tolerance for
+   ambiguity") — instead of requiring someone who's never heard of a
+   confidence threshold to guess at 0.6 vs. 0.8.
    The exact numeric values a preset maps to stay visible and editable in
    an "Advanced" panel, never hidden, so a technical reviewer (or a judge)
    can always see precisely what a preset means and override it.
