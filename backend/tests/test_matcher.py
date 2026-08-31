@@ -422,3 +422,55 @@ def test_batch_and_split_settlements_coexist_in_the_same_batch():
     methods_used = {m["method"] for m in final["matches"]}
     assert "batch_settlement" in methods_used
     assert "group_split" in methods_used
+
+
+# ---- exception priority classification and closing verdict ----
+
+def test_classify_exceptions_tags_priority_by_amount():
+    orders = [
+        {"order_id": "ORD_HIGH", "amount": 50000.0},
+        {"order_id": "ORD_MED", "amount": 2000.0},
+        {"order_id": "ORD_LOW", "amount": 100.0},
+    ]
+    exceptions = [
+        {"type": "amount_mismatch", "order_id": "ORD_HIGH", "reason": "..."},
+        {"type": "amount_mismatch", "order_id": "ORD_MED", "reason": "..."},
+        {"type": "amount_mismatch", "order_id": "ORD_LOW", "reason": "..."},
+    ]
+    classified = matcher.classify_exceptions(orders, exceptions, materiality_threshold=5000.0)
+    by_order = {e["order_id"]: e for e in classified}
+    assert by_order["ORD_HIGH"]["priority"] == "high"
+    assert by_order["ORD_MED"]["priority"] == "medium"
+    assert by_order["ORD_LOW"]["priority"] == "low"
+    assert by_order["ORD_HIGH"]["amount"] == 50000.0
+
+
+def test_classify_exceptions_uses_own_amount_for_orphan_bank_line_exceptions():
+    exceptions = [{"type": "unrecognized_bank_line", "bank_line_id": "bl1", "amount": 8000.0, "reason": "..."}]
+    classified = matcher.classify_exceptions([], exceptions, materiality_threshold=5000.0)
+    assert classified[0]["priority"] == "high"
+    assert classified[0]["amount"] == 8000.0
+
+
+def test_closing_verdict_blocks_close_when_material_exceptions_exist():
+    classified = [
+        {"type": "amount_mismatch", "order_id": "ORD1", "amount": 50000.0, "priority": "high"},
+        {"type": "amount_mismatch", "order_id": "ORD2", "amount": 100.0, "priority": "low"},
+    ]
+    verdict = matcher.closing_verdict(classified, materiality_threshold=5000.0)
+    assert verdict["can_close"] is False
+    assert verdict["material_exception_count"] == 1
+    assert verdict["material_exception_amount"] == 50000.0
+
+
+def test_closing_verdict_allows_close_when_only_non_material_exceptions_exist():
+    classified = [{"type": "amount_mismatch", "order_id": "ORD1", "amount": 100.0, "priority": "low"}]
+    verdict = matcher.closing_verdict(classified, materiality_threshold=5000.0)
+    assert verdict["can_close"] is True
+    assert verdict["material_exception_count"] == 0
+
+
+def test_closing_verdict_allows_close_with_zero_exceptions():
+    verdict = matcher.closing_verdict([], materiality_threshold=5000.0)
+    assert verdict["can_close"] is True
+    assert "safe to close" in verdict["message"].lower()

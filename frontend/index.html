@@ -133,6 +133,38 @@
 
   .validation-section { border-top: 1px solid var(--border-soft); padding-top: 28px; margin-top: 8px; }
   .validation-eyebrow { font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 6px; }
+
+  /* Policy picker */
+  .policy-picker { max-width: 640px; margin: 0 auto 18px; }
+  .policy-picker-label { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .policy-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .policy-btn {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 3px;
+    box-shadow: none; transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .policy-btn:hover:not(.active) { border-color: var(--accent-dim); transform: none; box-shadow: none; }
+  .policy-btn.active { border-color: var(--accent); background: var(--accent-dim); }
+  .policy-btn-title { font-weight: 700; font-size: 13px; color: var(--text); }
+  .policy-btn-sub { font-size: 11px; color: var(--muted); }
+
+  /* Closing verdict */
+  .verdict-banner {
+    display: flex; align-items: center; gap: 14px; padding: 18px 22px; border-radius: var(--radius);
+    margin-bottom: 24px; font-size: 14px;
+  }
+  .verdict-banner.can-close { background: #123a2f; border: 1px solid #1d5c46; }
+  .verdict-banner.cannot-close { background: #3a2a12; border: 1px solid #5c4a1d; }
+  .verdict-icon { font-size: 26px; }
+  .verdict-title { font-weight: 800; font-size: 15px; margin-bottom: 2px; }
+  .verdict-banner.can-close .verdict-title { color: var(--good); }
+  .verdict-banner.cannot-close .verdict-title { color: var(--warn); }
+  .verdict-message { color: var(--text); font-size: 13px; }
+
+  /* Exception priority tags */
+  .tag.priority-high { background: #3a1414; color: var(--bad); }
+  .tag.priority-medium { background: #3a3312; color: var(--warn); }
+  .tag.priority-low { background: #16202a; color: var(--muted); }
   .why-btn { font-size: 12px; padding: 5px 10px; }
   #evidence-overlay {
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100;
@@ -172,24 +204,49 @@
 
     <div class="hero-run-row">
       <div class="row-inputs">
-        <label>Orders: <input id="n-orders" type="number" value="70" min="10" max="500" style="width:64px"></label>
-        <label>Seed: <input id="seed" type="number" placeholder="random" style="width:90px"></label>
+        <label>Transactions: <input id="n-orders" type="number" value="70" min="10" max="500" style="width:64px"></label>
       </div>
       <button id="run-btn" class="run-btn-main">Run Controller</button>
     </div>
+
+    <div class="policy-picker" id="policy-picker">
+      <div class="policy-picker-label">Reconciliation policy</div>
+      <div class="policy-options">
+        <button type="button" class="policy-btn" data-preset="conservative">
+          <span class="policy-btn-title">Conservative</span>
+          <span class="policy-btn-sub">Fewer automatic matches, safer</span>
+        </button>
+        <button type="button" class="policy-btn active" data-preset="balanced">
+          <span class="policy-btn-title">Balanced</span>
+          <span class="policy-btn-sub">Recommended for most reconciliations</span>
+        </button>
+        <button type="button" class="policy-btn" data-preset="automatic">
+          <span class="policy-btn-title">Automatic</span>
+          <span class="policy-btn-sub">Clears more automatically</span>
+        </button>
+      </div>
+    </div>
+
     <div id="status"><span class="spinner" id="run-spinner"></span><span id="status-text"></span></div>
 
     <details class="advanced-toggle">
       <summary>Advanced settings &amp; bring your own data</summary>
       <div class="advanced-panel">
-        <div class="advanced-panel-label">Reconciliation policy</div>
+        <div class="advanced-panel-label">Exact policy values (set automatically by the picker above, or edit directly)</div>
         <div class="row">
-          <label title="Auto-accept bar for an LLM-proposed match">LLM confidence threshold:
+          <label title="Auto-accept bar for an LLM-proposed match -- higher means AI only clears when very confident">AI confidence threshold:
             <input id="confidence-threshold" type="number" value="0.6" min="0" max="1" step="0.05" style="width:70px"></label>
           <label title="Max settlement-vs-order amount difference treated as a plausible fee, not a mismatch">Fee tolerance %:
             <input id="fee-tolerance" type="number" value="3" min="0" max="50" step="0.5" style="width:60px"></label>
           <label title="Settlement date drift beyond this many days is flagged as fuzzy, not exact">Date drift OK (days):
             <input id="date-drift" type="number" value="3" min="0" max="30" style="width:60px"></label>
+          <label title="Exceptions at or above this rupee amount are treated as material -- they block the closing verdict">Materiality threshold (₹):
+            <input id="materiality-threshold" type="number" value="5000" min="0" step="500" style="width:80px"></label>
+        </div>
+        <div class="advanced-panel-label">Reproducibility (for judges/developers)</div>
+        <div class="row">
+          <label title="Leave blank for a random batch each run, or set a number to reproduce the exact same batch every time">Seed:
+            <input id="seed" type="number" placeholder="random" style="width:90px"></label>
         </div>
 
         <div class="advanced-panel-label">Bring your own data (CSV)</div>
@@ -219,31 +276,39 @@
 
   <div id="results" style="display:none">
 
+  <div class="verdict-banner" id="verdict-banner" style="display:none">
+    <div class="verdict-icon" id="verdict-icon"></div>
+    <div>
+      <div class="verdict-title" id="verdict-title"></div>
+      <div class="verdict-message" id="verdict-message"></div>
+    </div>
+  </div>
+
   <div class="cards-group-label">Financial position</div>
   <div class="cards" id="amount-cards" style="display:none">
-    <div class="card big"><div class="label">Amount processed</div><div class="value" id="c-amount-processed">--</div></div>
-    <div class="card big"><div class="label">Amount reconciled</div><div class="value good" id="c-amount-matched">--</div></div>
-    <div class="card big"><div class="label">Amount at risk</div><div class="value" id="c-amount-at-risk">--</div></div>
+    <div class="card big"><div class="label" title="Total value of every transaction in this batch">Amount processed</div><div class="value" id="c-amount-processed">--</div></div>
+    <div class="card big"><div class="label" title="Money confirmed as correctly matched across all three sources">Amount reconciled</div><div class="value good" id="c-amount-matched">--</div></div>
+    <div class="card big"><div class="label" title="Money linked to transactions that still need review before this batch can close">Amount at risk</div><div class="value" id="c-amount-at-risk">--</div></div>
     <div class="card big" id="value-accuracy-card" style="display:none"><div class="label" title="Order-level correctness, weighted by rupee amount -- not a claim that money was physically verified moving">Value-weighted accuracy</div><div class="value" id="c-amount-accuracy">--</div></div>
   </div>
 
   <div class="cards-group-label">Reconciliation quality</div>
   <div class="cards" id="cards" style="display:none">
-    <div class="card"><div class="label">Ground-truth accuracy</div><div class="value" id="c-accuracy">--</div></div>
-    <div class="card"><div class="label">Match rate</div><div class="value" id="c-match-rate">--</div></div>
-    <div class="card"><div class="label">Matched</div><div class="value" id="c-matched">--</div></div>
-    <div class="card"><div class="label">Exceptions</div><div class="value" id="c-exceptions">--</div></div>
-    <div class="card"><div class="label">Throughput</div><div class="value" id="c-throughput">--</div></div>
+    <div class="card"><div class="label" title="Scored against a known-correct answer the matcher never sees -- tells you correctness, not just volume. Only available for synthetic/benchmark data, never shown as a number for your own uploaded data.">Verified accuracy</div><div class="value" id="c-accuracy">--</div></div>
+    <div class="card"><div class="label" title="How many transactions were auto-resolved, regardless of whether the decision was actually correct">Match rate</div><div class="value" id="c-match-rate">--</div></div>
+    <div class="card"><div class="label" title="Transaction count successfully auto-resolved out of the total batch">Matched</div><div class="value" id="c-matched">--</div></div>
+    <div class="card"><div class="label" title="Transactions ReconIQ could not confidently resolve and flagged for review instead of guessing">Exceptions</div><div class="value" id="c-exceptions">--</div></div>
+    <div class="card"><div class="label" title="How fast the batch was processed, in records per second">Throughput</div><div class="value" id="c-throughput">--</div></div>
   </div>
   <p id="accuracy-note" style="display:none; color:var(--muted); font-size:12px; margin:-8px 0 20px">
-    Ground-truth accuracy is scored against the known-correct label seeded into each synthetic order
+    Verified accuracy is scored against the known-correct label seeded into each synthetic order
     (not visible to the matcher) &mdash; match rate alone only tells you volume, not correctness.
   </p>
 
   <div class="cards-group-label">Safety: how it's wrong when it's wrong</div>
   <div class="cards" id="money-weighted-cards" style="display:none">
-    <div class="card"><div class="label">False-clear amount</div><div class="value bad" id="c-false-clear">--</div></div>
-    <div class="card"><div class="label">Safe-miss amount</div><div class="value warn" id="c-safe-miss">--</div></div>
+    <div class="card"><div class="label" title="Money incorrectly marked as reconciled when it shouldn't have been -- the dangerous failure. Lower is safer.">False-clear amount</div><div class="value bad" id="c-false-clear">--</div></div>
+    <div class="card"><div class="label" title="Money left flagged for review even though it could have been matched -- the conservative failure. Money just sits reviewable, never moves wrong.">Safe-miss amount</div><div class="value warn" id="c-safe-miss">--</div></div>
   </div>
   <p id="money-weighted-note" style="display:none; color:var(--muted); font-size:12px; margin:-8px 0 20px">
     Transaction-count accuracy treats every order equally; value-weighted accuracy weights order-level
@@ -359,6 +424,7 @@ async function runReconciliation() {
   const confidenceThreshold = parseFloat($("confidence-threshold").value);
   const feeTolerancePct = parseFloat($("fee-tolerance").value) / 100;
   const dateDriftOkDays = parseInt($("date-drift").value, 10);
+  const materialityThreshold = parseFloat($("materiality-threshold").value) || 0;
   $("run-btn").disabled = true;
   setStatus("Generating batch and reconciling...", true);
   try {
@@ -367,6 +433,7 @@ async function runReconciliation() {
       body: JSON.stringify({
         n_orders: n, seed, confidence_threshold: confidenceThreshold,
         fee_tolerance_pct: feeTolerancePct, date_drift_ok_days: dateDriftOkDays,
+        materiality_threshold: materialityThreshold,
       }),
     });
     if (!res.ok) throw new Error(`API returned ${res.status}`);
@@ -437,6 +504,7 @@ async function runOnUploadedData() {
         confidence_threshold: parseFloat($("confidence-threshold").value),
         fee_tolerance_pct: parseFloat($("fee-tolerance").value) / 100,
         date_drift_ok_days: parseInt($("date-drift").value, 10),
+        materiality_threshold: parseFloat($("materiality-threshold").value) || 0,
       }),
     });
     if (!res.ok) {
@@ -459,6 +527,7 @@ function renderAll(scrollTo = true) {
   $("empty-state").style.display = "none";
   $("results").style.display = "";
 
+  renderVerdict(currentRun.verdict);
   renderSummary(currentRun.summary);
   renderMethodChart(currentRun.matches);
   renderExceptionChart(currentRun.exceptions);
@@ -491,6 +560,37 @@ function renderRulesOnlyComparison(rulesOnly, withAi) {
       the AI layer only ever touches what the rules alone left as an exception.</p>`;
 }
 
+function renderVerdict(verdict) {
+  if (!verdict) { $("verdict-banner").style.display = "none"; return; }
+  const banner = $("verdict-banner");
+  banner.className = "verdict-banner " + (verdict.can_close ? "can-close" : "cannot-close");
+  $("verdict-icon").textContent = verdict.can_close ? "✅" : "⚠️";
+  $("verdict-title").textContent = verdict.can_close ? "Safe to close" : "Cannot close";
+  $("verdict-message").textContent = verdict.message;
+  banner.style.display = "flex";
+}
+
+const POLICY_PRESETS = {
+  conservative: { confidence_threshold: 0.8, fee_tolerance: 2, date_drift: 2 },
+  balanced:     { confidence_threshold: 0.6, fee_tolerance: 3, date_drift: 3 },
+  automatic:    { confidence_threshold: 0.4, fee_tolerance: 5, date_drift: 5 },
+};
+
+function applyPolicyPreset(name) {
+  const p = POLICY_PRESETS[name];
+  if (!p) return;
+  $("confidence-threshold").value = p.confidence_threshold;
+  $("fee-tolerance").value = p.fee_tolerance;
+  $("date-drift").value = p.date_drift;
+  document.querySelectorAll(".policy-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.preset === name);
+  });
+}
+
+document.querySelectorAll(".policy-btn").forEach(btn => {
+  btn.addEventListener("click", () => applyPolicyPreset(btn.dataset.preset));
+});
+
 async function submitOverride(action, orderId, bankLineId, reviewerNote) {
   $("status-text").textContent = "Applying override...";
   try {
@@ -500,6 +600,7 @@ async function submitOverride(action, orderId, bankLineId, reviewerNote) {
         orders: currentRun.orders, matches: currentRun.matches,
         exceptions: currentRun.exceptions, audit_trail: currentRun.audit_trail,
         action, order_id: orderId, bank_line_id: bankLineId, reviewer_note: reviewerNote,
+        materiality_threshold: parseFloat($("materiality-threshold").value) || 0,
       }),
     });
     if (!res.ok) {
@@ -683,14 +784,24 @@ function renderExceptionChart(exceptions) {
   barChart("chart-exceptions", entries, () => EXCEPTION_COLOR);
 }
 
+const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
+
 function renderExceptions(exceptions) {
   if (!exceptions.length) {
     $("exceptions-table").innerHTML = '<div class="empty">No exceptions in this run.</div>';
     return;
   }
   const orphanBankLines = exceptions.filter(e => e.type === "unrecognized_bank_line" && e.bank_line_id);
+  const sorted = [...exceptions].sort((a, b) =>
+    (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3) || (b.amount ?? 0) - (a.amount ?? 0));
 
-  let rows = exceptions.map(e => {
+  const highCount = sorted.filter(e => e.priority === "high").length;
+  const summaryLine = highCount
+    ? `<p style="color:var(--muted);font-size:12px;margin:-4px 0 14px">Sorted by priority &mdash;
+        <strong style="color:var(--bad)">${highCount} high-priority</strong> exception(s) shown first. Review those before closing.</p>`
+    : `<p style="color:var(--muted);font-size:12px;margin:-4px 0 14px">No high-priority exceptions in this batch.</p>`;
+
+  let rows = sorted.map(e => {
     const reviewCell = (e.order_id && orphanBankLines.length)
       ? `<select class="secondary manual-match-select" data-order-id="${esc(e.order_id)}">
            <option value="">-- pick unclaimed bank line --</option>
@@ -699,17 +810,21 @@ function renderExceptions(exceptions) {
          <button class="secondary manual-match-btn" data-order-id="${esc(e.order_id)}">Manually match</button>`
       : "";
     const whyBtn = `<button class="secondary why-btn" data-order-id="${esc(e.order_id || "")}" data-bank-line-id="${esc(e.bank_line_id || "")}">Why?</button>`;
+    const priorityTag = e.priority ? `<span class="tag priority-${esc(e.priority)}">${esc(e.priority)}</span>` : "";
     return `
     <tr>
+      <td>${priorityTag}</td>
       <td><span class="tag exception">${esc(e.type)}</span></td>
       <td>${esc(e.order_id ?? e.bank_line_id ?? "-")}</td>
+      <td>${typeof e.amount === "number" ? rupees(e.amount) : "-"}</td>
       <td>${esc(e.reason)}</td>
       <td>${whyBtn}</td>
       <td>${reviewCell}</td>
     </tr>`;
   }).join("");
   $("exceptions-table").innerHTML = `
-    <table><thead><tr><th>Type</th><th>Entity</th><th>Reason</th><th></th><th>Review</th></tr></thead>
+    ${summaryLine}
+    <table><thead><tr><th>Priority</th><th>Type</th><th>Entity</th><th>Amount</th><th>Reason</th><th></th><th>Review</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
 }
 
@@ -883,17 +998,25 @@ async function runBenchmark() {
   }
 }
 
+function dataQualityLabel(rate) {
+  const pct = rate * 100;
+  if (pct <= 15) return "Light";
+  if (pct <= 30) return "Moderate";
+  if (pct <= 45) return "Heavy";
+  return "Severe";
+}
+
 function renderBenchmark(data) {
-  const xLabels = data.results.map(r => `${Math.round(r.corruption_rate * 100)}%`);
+  const xLabels = data.results.map(r => `${dataQualityLabel(r.corruption_rate)} (${Math.round(r.corruption_rate * 100)}%)`);
   lineChart("benchmark-chart", [
-    { label: "Ground-truth accuracy", color: "#6fcf97", points: data.results.map(r => r.ground_truth_accuracy), xLabels },
+    { label: "Verified accuracy", color: "#6fcf97", points: data.results.map(r => r.ground_truth_accuracy), xLabels },
     { label: "Match rate", color: "#7aa2f7", points: data.results.map(r => r.match_rate), xLabels },
     { label: "Value-weighted accuracy", color: "#f2c94c", points: data.results.map(r => r.amount_accuracy), xLabels },
   ]);
 
   const rows = data.results.map(r => `
     <tr>
-      <td>${Math.round(r.corruption_rate * 100)}%</td>
+      <td>${dataQualityLabel(r.corruption_rate)} <span style="color:var(--muted)">(${Math.round(r.corruption_rate * 100)}%)</span></td>
       <td>${pct(r.match_rate)}</td>
       <td>${pct(r.ground_truth_accuracy)}</td>
       <td>${pct(r.amount_accuracy)}</td>
@@ -901,7 +1024,7 @@ function renderBenchmark(data) {
       <td>${rupees(r.false_clear_amount)}</td>
     </tr>`).join("");
   $("benchmark-table").innerHTML = `
-    <table><thead><tr><th>Corruption</th><th>Match rate</th><th>Ground-truth acc.</th>
+    <table><thead><tr><th>Data quality</th><th>Match rate</th><th>Verified acc.</th>
     <th>Value-weighted acc.</th><th>Exceptions</th><th>False-clear ₹</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
 }

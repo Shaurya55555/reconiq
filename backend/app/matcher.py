@@ -413,3 +413,58 @@ def summarize(orders: list[dict], result: dict) -> dict:
         "total_amount_matched": total_amount_matched,
         "total_amount_at_risk": total_amount_at_risk,
     }
+
+
+DEFAULT_MATERIALITY_THRESHOLD = 5000.0
+
+
+def classify_exceptions(orders: list[dict], exceptions: list[dict],
+                         materiality_threshold: float = DEFAULT_MATERIALITY_THRESHOLD) -> list[dict]:
+    """Attach a rupee amount and a priority tier (high/medium/low) to every
+    exception, so a reviewer sees which ones actually matter first instead
+    of an unordered list. This is a display/triage concern computed here
+    over the matcher's output, not baked into the matching passes
+    themselves -- the underlying exception records are unchanged, just
+    annotated. Works for uploaded data too (no ground truth needed).
+    """
+    amount_by_order_id = {o["order_id"]: o["amount"] for o in orders}
+    classified = []
+    for e in exceptions:
+        e = dict(e)
+        amount = e.get("amount")
+        if amount is None and e.get("order_id"):
+            amount = amount_by_order_id.get(e["order_id"], 0.0)
+        e["amount"] = round(amount or 0.0, 2)
+        if e["amount"] >= materiality_threshold:
+            e["priority"] = "high"
+        elif e["amount"] >= materiality_threshold * 0.3:
+            e["priority"] = "medium"
+        else:
+            e["priority"] = "low"
+        classified.append(e)
+    return classified
+
+
+def closing_verdict(classified_exceptions: list[dict],
+                     materiality_threshold: float = DEFAULT_MATERIALITY_THRESHOLD) -> dict:
+    """A plain answer to the question a finance controller actually asks --
+    not 'here are eight numbers, you decide' but a stated verdict, the way
+    apply_override tags human decisions distinctly: this is a synthesis
+    layer over data already computed, not a new decision-making pass.
+    """
+    material = [e for e in classified_exceptions if e["priority"] == "high"]
+    material_amount = round(sum(e["amount"] for e in material), 2)
+    can_close = len(material) == 0
+    if can_close:
+        message = "No material unresolved discrepancies. Safe to close."
+    else:
+        message = (f"{len(material)} material exception(s) totaling "
+                   f"₹{material_amount:,.0f} remain unresolved "
+                   f"(materiality threshold: ₹{materiality_threshold:,.0f}).")
+    return {
+        "can_close": can_close,
+        "materiality_threshold": materiality_threshold,
+        "material_exception_count": len(material),
+        "material_exception_amount": material_amount,
+        "message": message,
+    }

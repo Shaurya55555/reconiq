@@ -15,10 +15,25 @@ def test_run_endpoint_returns_full_stateless_payload():
     assert res.status_code == 200
     body = res.json()
     for key in ("run_id", "summary", "orders", "settlements", "bank_lines",
-                "matches", "exceptions", "audit_trail", "ground_truth"):
+                "matches", "exceptions", "audit_trail", "ground_truth", "verdict"):
         assert key in body
     assert len(body["orders"]) == 40
     assert body["summary"]["total_orders"] == 40
+    assert "can_close" in body["verdict"]
+    for e in body["exceptions"]:
+        assert "priority" in e and e["priority"] in ("high", "medium", "low")
+        assert "amount" in e
+
+
+def test_run_endpoint_respects_custom_materiality_threshold():
+    # a very low threshold should make even small exceptions "high" priority
+    # and therefore block the closing verdict, if there are any exceptions at all
+    res = client.post("/api/run", json={"n_orders": 60, "seed": 21, "materiality_threshold": 1.0})
+    assert res.status_code == 200
+    body = res.json()
+    if body["exceptions"]:
+        assert any(e["priority"] == "high" for e in body["exceptions"])
+        assert body["verdict"]["can_close"] is False
 
 
 def test_override_endpoint_rejects_a_shaky_match_and_updates_summary():

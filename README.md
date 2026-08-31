@@ -63,6 +63,26 @@ ReconIQ closes that loop automatically on a batch of orders:
    Ground-truth accuracy is honestly omitted for uploaded data — there's
    no seeded truth label to score against — but match rate, amount at
    risk, and the exception list are still reported.
+8. **Closing verdict, not just a pile of exceptions.** Every run adds a
+   business-facing decision layer on top of the exception list: each
+   exception is tagged with an amount-based `priority` (`high` /
+   `medium` / `low`, relative to a tunable `materiality_threshold`, ₹5,000
+   by default), and a `closing_verdict` synthesizes those into a single
+   "Safe to close" / "Cannot close" call plus the total ₹ still
+   unresolved. A finance controller doesn't need to read 40 exception
+   rows to know whether the books can close today — the verdict banner at
+   the top of the dashboard answers that directly. This is pure
+   synthesis over already-computed data (no new matching logic, no new
+   risk); it exists because the end user is a financer, not an engineer,
+   and "can I close the books" is the actual question they're asking.
+9. **Plain-English policy presets.** The three numeric matching knobs
+   (`confidence_threshold`, `fee_tolerance_pct`, `date_drift_ok_days`)
+   are exposed to non-technical users as three named presets —
+   Conservative / Balanced / Automatic — instead of requiring someone
+   who's never heard of a confidence threshold to guess at 0.6 vs. 0.8.
+   The exact numeric values a preset maps to stay visible and editable in
+   an "Advanced" panel, never hidden, so a technical reviewer (or a judge)
+   can always see precisely what a preset means and override it.
 
 ## Beyond 1:1 matching, in more depth
 
@@ -393,8 +413,9 @@ serverless function.
 | `LLM_PROVIDER` | env | unset (offline heuristic); live deployment sets `gemini` | `openai` \| `anthropic` \| `gemini` \| `ollama` |
 | `LLM_MODEL` | env | provider-specific | override the specific model used |
 | `LLM_CONFIDENCE_THRESHOLD` | env, or `confidence_threshold` in the `/api/run` request | `0.6` | auto-accept bar for an LLM-proposed match |
-| `FEE_TOLERANCE_PCT` | constant in `matcher.py` | `0.03` | would be per-merchant configurable in production, not a hardcoded constant, since real fee schedules vary by payment method and merchant category |
-| `DATE_DRIFT_OK_DAYS` | constant in `matcher.py` | `3` | same — real settlement SLAs vary by bank and settlement cycle |
+| `FEE_TOLERANCE_PCT` | constant in `matcher.py`, or `fee_tolerance_pct` request field | `0.03` | would be per-merchant configurable in production, not a hardcoded constant, since real fee schedules vary by payment method and merchant category |
+| `DATE_DRIFT_OK_DAYS` | constant in `matcher.py`, or `date_drift_ok_days` request field | `3` | same — real settlement SLAs vary by bank and settlement cycle |
+| `materiality_threshold` | `/api/run`, `/api/run-upload`, `/api/override` request field | `5000` (₹) | exception ₹ amount above which it's tagged `priority: high` and blocks the closing verdict |
 
 ## Roadmap — what's deliberately not built, and why
 

@@ -27,6 +27,7 @@ class RunRequest(BaseModel):
     confidence_threshold: float | None = None
     fee_tolerance_pct: float = matcher.FEE_TOLERANCE_PCT
     date_drift_ok_days: int = matcher.DATE_DRIFT_OK_DAYS
+    materiality_threshold: float = matcher.DEFAULT_MATERIALITY_THRESHOLD
 
 
 class AskRequest(BaseModel):
@@ -64,6 +65,7 @@ class UploadRunRequest(BaseModel):
     confidence_threshold: float | None = None
     fee_tolerance_pct: float = matcher.FEE_TOLERANCE_PCT
     date_drift_ok_days: int = matcher.DATE_DRIFT_OK_DAYS
+    materiality_threshold: float = matcher.DEFAULT_MATERIALITY_THRESHOLD
 
 
 def _validate_and_coerce(rows: list[dict], required: set[str], label: str) -> list[dict]:
@@ -92,6 +94,13 @@ class OverrideRequest(BaseModel):
     order_id: str
     bank_line_id: str | None = None
     reviewer_note: str | None = None
+    materiality_threshold: float = matcher.DEFAULT_MATERIALITY_THRESHOLD
+
+
+def _classify_and_verdict(orders: list[dict], exceptions: list[dict], materiality_threshold: float) -> tuple[list[dict], dict]:
+    classified = matcher.classify_exceptions(orders, exceptions, materiality_threshold)
+    verdict = matcher.closing_verdict(classified, materiality_threshold)
+    return classified, verdict
 
 
 @app.post("/api/run")
@@ -136,6 +145,8 @@ def run_reconciliation(req: RunRequest):
     ground_truth = scoring.score_against_ground_truth(batch["orders"], final)
     _apply_ground_truth_to_summary(summary, ground_truth)
 
+    classified_exceptions, verdict = _classify_and_verdict(batch["orders"], final["exceptions"], req.materiality_threshold)
+
     run_id = store.new_run({"summary": summary, "n_orders": req.n_orders})
 
     return {
@@ -145,7 +156,8 @@ def run_reconciliation(req: RunRequest):
         "settlements": batch["settlements"],
         "bank_lines": batch["bank_lines"],
         "matches": final["matches"],
-        "exceptions": final["exceptions"],
+        "exceptions": classified_exceptions,
+        "verdict": verdict,
         "audit_trail": final["audit_trail"],
         "ground_truth": ground_truth,
         "rules_only_summary": rules_only_summary,
@@ -230,13 +242,16 @@ def run_uploaded_data(req: UploadRunRequest):
     summary["fee_tolerance_pct"] = req.fee_tolerance_pct
     summary["date_drift_ok_days"] = req.date_drift_ok_days
 
+    classified_exceptions, verdict = _classify_and_verdict(orders, final["exceptions"], req.materiality_threshold)
+
     return {
         "summary": summary,
         "orders": orders,
         "settlements": settlements,
         "bank_lines": bank_lines,
         "matches": final["matches"],
-        "exceptions": final["exceptions"],
+        "exceptions": classified_exceptions,
+        "verdict": verdict,
         "audit_trail": final["audit_trail"],
     }
 
@@ -262,11 +277,14 @@ def override(req: OverrideRequest):
     ground_truth = scoring.score_against_ground_truth(req.orders, result)
     _apply_ground_truth_to_summary(summary, ground_truth)
 
+    classified_exceptions, verdict = _classify_and_verdict(req.orders, result["exceptions"], req.materiality_threshold)
+
     return {
         "summary": summary,
         "orders": req.orders,
         "matches": result["matches"],
-        "exceptions": result["exceptions"],
+        "exceptions": classified_exceptions,
+        "verdict": verdict,
         "audit_trail": result["audit_trail"],
         "ground_truth": ground_truth,
     }
