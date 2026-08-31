@@ -56,12 +56,14 @@ class BenchmarkRequest(BaseModel):
 REQUIRED_ORDER_FIELDS = {"order_id", "amount", "razorpay_payment_id", "created_at"}
 REQUIRED_SETTLEMENT_FIELDS = {"settlement_id", "payment_id", "utr", "amount", "settled_at"}
 REQUIRED_BANK_LINE_FIELDS = {"line_id", "narration", "amount", "value_date"}
+REQUIRED_REFUND_FIELDS = {"payment_id", "amount"}
 
 
 class UploadRunRequest(BaseModel):
     orders: list[dict]
     settlements: list[dict]
     bank_lines: list[dict]
+    refunds: list[dict] = []
     confidence_threshold: float | None = None
     fee_tolerance_pct: float = matcher.FEE_TOLERANCE_PCT
     date_drift_ok_days: int = matcher.DATE_DRIFT_OK_DAYS
@@ -119,7 +121,8 @@ def run_reconciliation(req: RunRequest):
     batch = data_gen.generate_batch(n_orders=req.n_orders, seed=req.seed)
     rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
                                      fee_tolerance_pct=req.fee_tolerance_pct,
-                                     date_drift_ok_days=req.date_drift_ok_days)
+                                     date_drift_ok_days=req.date_drift_ok_days,
+                                     refunds=batch["refunds"])
 
     # Rules-only counterfactual: what the deterministic passes alone would
     # have produced, with every LLM-deferred case landing as an honest
@@ -127,14 +130,14 @@ def run_reconciliation(req: RunRequest):
     # the "why does the LLM exist" comparison is apples-to-apples, not a
     # separate cherry-picked run.
     rules_only = matcher.apply_llm_resolutions(rule_result, llm_resolve_fn=None, confidence_threshold=threshold)
-    rules_only_summary = matcher.summarize(batch["orders"], rules_only)
+    rules_only_summary = matcher.summarize(batch["orders"], rules_only, refunds=batch["refunds"])
     rules_only_ground_truth = scoring.score_against_ground_truth(batch["orders"], rules_only)
     _apply_ground_truth_to_summary(rules_only_summary, rules_only_ground_truth)
 
     final = matcher.apply_llm_resolutions(rule_result, llm_resolver.resolve, confidence_threshold=threshold)
     elapsed = time.perf_counter() - t0
 
-    summary = matcher.summarize(batch["orders"], final)
+    summary = matcher.summarize(batch["orders"], final, refunds=batch["refunds"])
     summary["throughput_records_per_sec"] = round(req.n_orders / elapsed, 1) if elapsed > 0 else None
     summary["elapsed_seconds"] = round(elapsed, 3)
     summary["llm_provider"] = os.getenv("LLM_PROVIDER", "heuristic (offline fallback)")
@@ -155,6 +158,7 @@ def run_reconciliation(req: RunRequest):
         "orders": batch["orders"],
         "settlements": batch["settlements"],
         "bank_lines": batch["bank_lines"],
+        "refunds": batch["refunds"],
         "matches": final["matches"],
         "exceptions": classified_exceptions,
         "verdict": verdict,
@@ -192,9 +196,10 @@ def benchmark(req: BenchmarkRequest):
         batch = data_gen.generate_batch(n_orders=req.n_orders, seed=seed, corruption_rate=rate)
         rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
                                          fee_tolerance_pct=req.fee_tolerance_pct,
-                                         date_drift_ok_days=req.date_drift_ok_days)
+                                         date_drift_ok_days=req.date_drift_ok_days,
+                                         refunds=batch["refunds"])
         final = matcher.apply_llm_resolutions(rule_result, resolve_fn, confidence_threshold=threshold)
-        summary = matcher.summarize(batch["orders"], final)
+        summary = matcher.summarize(batch["orders"], final, refunds=batch["refunds"])
         ground_truth = scoring.score_against_ground_truth(batch["orders"], final)
         _apply_ground_truth_to_summary(summary, ground_truth)
         results.append({"corruption_rate": rate, **summary})
@@ -220,6 +225,7 @@ def run_uploaded_data(req: UploadRunRequest):
         orders = _validate_and_coerce(req.orders, REQUIRED_ORDER_FIELDS, "orders")
         settlements = _validate_and_coerce(req.settlements, REQUIRED_SETTLEMENT_FIELDS, "settlements")
         bank_lines = _validate_and_coerce(req.bank_lines, REQUIRED_BANK_LINE_FIELDS, "bank_lines")
+        refunds = _validate_and_coerce(req.refunds, REQUIRED_REFUND_FIELDS, "refunds") if req.refunds else []
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
@@ -230,11 +236,12 @@ def run_uploaded_data(req: UploadRunRequest):
     t0 = time.perf_counter()
     rule_result = matcher.reconcile(orders, settlements, bank_lines,
                                      fee_tolerance_pct=req.fee_tolerance_pct,
-                                     date_drift_ok_days=req.date_drift_ok_days)
+                                     date_drift_ok_days=req.date_drift_ok_days,
+                                     refunds=refunds)
     final = matcher.apply_llm_resolutions(rule_result, llm_resolver.resolve, confidence_threshold=threshold)
     elapsed = time.perf_counter() - t0
 
-    summary = matcher.summarize(orders, final)
+    summary = matcher.summarize(orders, final, refunds=refunds)
     summary["throughput_records_per_sec"] = round(len(orders) / elapsed, 1) if elapsed > 0 else None
     summary["elapsed_seconds"] = round(elapsed, 3)
     summary["llm_provider"] = os.getenv("LLM_PROVIDER", "heuristic (offline fallback)")
@@ -249,6 +256,7 @@ def run_uploaded_data(req: UploadRunRequest):
         "orders": orders,
         "settlements": settlements,
         "bank_lines": bank_lines,
+        "refunds": refunds,
         "matches": final["matches"],
         "exceptions": classified_exceptions,
         "verdict": verdict,

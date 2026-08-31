@@ -75,6 +75,7 @@
   .tag.human_override { background: #2a1a3a; color: #c792ea; }
   .tag.group_split { background: #123449; color: #56c8e0; }
   .tag.batch_settlement { background: #1a3324; color: #7ee08a; }
+  .tag.refunded { background: #2a2440; color: #b39ddb; }
   .tag.exception { background: #3a1414; color: var(--bad); }
   select.manual-match-select { font-size: 12px; padding: 4px 6px; margin-right: 6px; }
   .accept-btn, .reject-btn, .manual-match-btn { font-size: 12px; padding: 5px 10px; margin-right: 4px; }
@@ -264,6 +265,7 @@
           <label>Orders CSV: <input id="upload-orders" type="file" accept=".csv"></label>
           <label>Settlements CSV: <input id="upload-settlements" type="file" accept=".csv"></label>
           <label>Bank lines CSV: <input id="upload-bank-lines" type="file" accept=".csv"></label>
+          <label>Refunds CSV (optional): <input id="upload-refunds" type="file" accept=".csv"></label>
         </div>
         <div class="row">
           <button class="secondary" id="upload-run-btn">Run on my data</button>
@@ -272,6 +274,7 @@
           Required columns &mdash; orders: order_id, amount, razorpay_payment_id, created_at.
           settlements: settlement_id, payment_id, utr, amount, settled_at.
           bank_lines: line_id, narration, amount, value_date.
+          refunds (optional): payment_id, amount.
           No ground-truth accuracy is shown for your own data (no seeded truth label to score against) &mdash;
           match rate, amount at risk, and the exception list still are.
         </p>
@@ -301,6 +304,7 @@
     <div class="card big"><div class="label" title="Total value of every transaction in this batch">Amount processed</div><div class="value" id="c-amount-processed">--</div></div>
     <div class="card big"><div class="label" title="Money confirmed as correctly matched across all three sources">Amount reconciled</div><div class="value good" id="c-amount-matched">--</div></div>
     <div class="card big"><div class="label" title="Money linked to transactions that still need review before this batch can close">Amount at risk</div><div class="value" id="c-amount-at-risk">--</div></div>
+    <div class="card big" id="amount-refunded-card" style="display:none"><div class="label" title="Money returned to customers via full or partial refunds -- correctly resolved, but never counted as reconciled settlement money">Amount refunded</div><div class="value" id="c-amount-refunded">--</div></div>
     <div class="card big" id="value-accuracy-card" style="display:none"><div class="label" title="Order-level correctness, weighted by rupee amount -- not a claim that money was physically verified moving">Value-weighted accuracy</div><div class="value" id="c-amount-accuracy">--</div></div>
   </div>
 
@@ -421,7 +425,8 @@ const pct = (x) => (x * 100).toFixed(1) + "%";
 const rupees = (x) => "₹" + Number(x).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 const tagFor = (method) => `<span class="tag ${esc(method)}">${esc(method)}</span>`;
 
-const METHOD_COLORS = { exact: "#6fcf97", fuzzy: "#f2c94c", group_split: "#56c8e0", batch_settlement: "#7ee08a", llm: "#7aa2f7", human_override: "#c792ea" };
+const METHOD_COLORS = { exact: "#6fcf97", fuzzy: "#f2c94c", group_split: "#56c8e0", batch_settlement: "#7ee08a", refunded: "#b39ddb", llm: "#7aa2f7", human_override: "#c792ea" };
+const ALL_METHODS = ["exact", "fuzzy", "group_split", "batch_settlement", "refunded", "llm", "human_override"];
 const EXCEPTION_COLOR = "#f47174";
 
 function setStatus(text, loading) {
@@ -501,18 +506,20 @@ async function runOnUploadedData() {
   $("upload-run-btn").disabled = true;
   setStatus("Parsing CSVs and reconciling...", true);
   try {
-    const [ordersText, settlementsText, bankLinesText] = await Promise.all([
+    const [ordersText, settlementsText, bankLinesText, refundsText] = await Promise.all([
       readFileAsText($("upload-orders")), readFileAsText($("upload-settlements")), readFileAsText($("upload-bank-lines")),
+      readFileAsText($("upload-refunds")),
     ]);
     if (!ordersText || !settlementsText || !bankLinesText) {
-      throw new Error("Pick all three CSV files (orders, settlements, bank lines).");
+      throw new Error("Pick all three required CSV files (orders, settlements, bank lines).");
     }
     const orders = parseCsv(ordersText), settlements = parseCsv(settlementsText), bankLines = parseCsv(bankLinesText);
+    const refunds = refundsText ? parseCsv(refundsText) : [];
 
     const res = await fetch(`${API}/api/run-upload`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        orders, settlements, bank_lines: bankLines,
+        orders, settlements, bank_lines: bankLines, refunds,
         confidence_threshold: parseFloat($("confidence-threshold").value),
         fee_tolerance_pct: parseFloat($("fee-tolerance").value) / 100,
         date_drift_ok_days: parseInt($("date-drift").value, 10),
@@ -643,6 +650,9 @@ function findSettlementsByPaymentId(paymentId) {
 function findBankLineById(id) {
   return (currentRun.bank_lines || []).find(b => b.line_id === id);
 }
+function findRefundsByPaymentId(paymentId) {
+  return (currentRun.refunds || []).filter(r => r.payment_id === paymentId);
+}
 
 function daysBetween(isoA, isoB) {
   if (!isoA || !isoB) return null;
@@ -680,8 +690,16 @@ function showEvidence(orderId, bankLineId) {
     ? `<div class="evidence-verdict matched">✅ MATCHED &mdash; ${esc(match.method)}, confidence ${match.confidence}${groupSuffix}</div>`
     : `<div class="evidence-verdict exception">⛔ ${exceptionsFor.length ? esc(exceptionsFor.map(e => e.type).join(", ")) : "NO RECORD"}</div>`;
 
+  const refundsForOrder = order ? findRefundsByPaymentId(order.razorpay_payment_id) : [];
+  const refundTotal = refundsForOrder.reduce((sum, r) => sum + r.amount, 0);
+
   const rows = [];
   if (order) rows.push(["Order amount", rupees(order.amount)]);
+  if (refundsForOrder.length) {
+    rows.push([refundsForOrder.length > 1 ? "Refunds" : "Refund",
+      refundsForOrder.map(r => `${rupees(r.amount)} (${esc(r.type)}, ${r.refunded_at.slice(0, 10)})`).join("<br>")]);
+    rows.push(["Net of refund", rupees(Math.max((order?.amount ?? 0) - refundTotal, 0))]);
+  }
   if (settlement && isBatch) {
     rows.push(["Settlement amount (batch total)", rupees(settlement.amount)]);
     rows.push(["Batch members", batchSiblings.map(m => {
@@ -764,6 +782,12 @@ function renderSummary(s) {
     $("c-amount-matched").textContent = rupees(s.total_amount_matched);
     $("c-amount-at-risk").textContent = rupees(s.total_amount_at_risk);
     $("c-amount-at-risk").className = "value " + (s.total_amount_at_risk === 0 ? "good" : "bad");
+    if (s.total_amount_refunded) {
+      $("c-amount-refunded").textContent = rupees(s.total_amount_refunded);
+      $("amount-refunded-card").style.display = "";
+    } else {
+      $("amount-refunded-card").style.display = "none";
+    }
     $("amount-cards").style.display = "";
   }
 
@@ -791,7 +815,7 @@ function barChart(containerId, entries, colorFor) {
 function renderMethodChart(matches) {
   const counts = {};
   matches.forEach(m => counts[m.method] = (counts[m.method] || 0) + 1);
-  const entries = ["exact", "fuzzy", "group_split", "batch_settlement", "llm", "human_override"].filter(k => counts[k]).map(k => [k, counts[k]]);
+  const entries = ALL_METHODS.filter(k => counts[k]).map(k => [k, counts[k]]);
   barChart("chart-methods", entries, (label) => METHOD_COLORS[label] || "#888");
 }
 
@@ -852,7 +876,7 @@ function renderMatches(matches) {
   const byMethod = {};
   matches.forEach(m => { (byMethod[m.method] = byMethod[m.method] || []).push(m); });
   let html = "";
-  for (const method of ["exact", "fuzzy", "group_split", "batch_settlement", "llm", "human_override"]) {
+  for (const method of ALL_METHODS) {
     const list = byMethod[method] || [];
     if (!list.length) continue;
     const rows = list.slice(0, 8).map(m => {

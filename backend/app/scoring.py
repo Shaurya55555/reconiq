@@ -24,6 +24,8 @@ EXPECTED_OUTCOME = {
     "duplicate_settlement": "matched",
     "split_settlement": "matched",
     "batch_settlement": "matched",
+    "refunded": "matched",
+    "partial_refund": "matched",
     "missing_settlement": "exception",
     "amount_mismatch": "exception",
 }

@@ -75,11 +75,20 @@ def _find_settlement_match(stl: dict, order: dict, utr_matches: list[dict],
 
 def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict],
               fee_tolerance_pct: float = FEE_TOLERANCE_PCT,
-              date_drift_ok_days: int = DATE_DRIFT_OK_DAYS) -> dict[str, Any]:
+              date_drift_ok_days: int = DATE_DRIFT_OK_DAYS,
+              refunds: list[dict] | None = None) -> dict[str, Any]:
     """fee_tolerance_pct and date_drift_ok_days are policy, not physics --
     a real merchant's actual fee schedule and settlement SLA would set
     these, so they're parameters with the current constants as defaults,
     not hardcoded thresholds baked into the pass logic below.
+
+    `refunds` (optional -- empty for callers that don't have refund data)
+    is a list of {payment_id, amount, ...} rows. A refund isn't noise to
+    explain away: it changes what settlement amount is *expected*. A full
+    refund means no settlement should exist at all; a partial refund means
+    the settlement is genuinely order.amount - refund.amount, not a fee
+    adjustment. Comparing against the raw order amount in either case
+    would misfile a correct outcome as an exception.
     """
     audit: list[dict] = []
     matches: list[dict] = []
@@ -88,6 +97,11 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
     orders_by_payment = {}
     for o in orders:
         orders_by_payment.setdefault(o["razorpay_payment_id"], []).append(o)
+
+    refund_total_by_payment: dict[str, float] = {}
+    for r in (refunds or []):
+        refund_total_by_payment[r["payment_id"]] = round(
+            refund_total_by_payment.get(r["payment_id"], 0.0) + r["amount"], 2)
 
     # A settlement normally covers one payment_id, but a batch settlement
     # (multiple payments consolidated by Razorpay into one settlement,
@@ -170,8 +184,21 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
                 "duplicate payment_id across orders", order_id=extra_order["order_id"])
 
         candidate_settlements = settlements_by_payment.get(payment_id, [])
+        refund_total = refund_total_by_payment.get(payment_id, 0.0)
 
         if not candidate_settlements:
+            if refund_total >= order["amount"] - 1.0:
+                # No settlement exists, but a refund fully explains why --
+                # Razorpay never generates a settlement for a fully refunded
+                # payment. This is a correct, resolved outcome, not a gap.
+                note = f"Order fully refunded (₹{refund_total:,.2f}); no settlement expected."
+                matches.append({
+                    "order_id": order["order_id"], "settlement_id": None,
+                    "bank_line_id": None, "method": "refunded", "confidence": 1.0,
+                    "note": note,
+                })
+                log("refund_check", "matched", "refunded", 1.0, note, order_id=order["order_id"])
+                continue
             exceptions.append({
                 "type": "no_settlement_found", "order_id": order["order_id"],
                 "reason": "Order has a Razorpay payment_id but no matching settlement "
@@ -181,6 +208,16 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
                 "no settlement row for this payment_id", order_id=order["order_id"])
             continue
 
+        # A refund shrinks what settlement amount is *expected* -- match
+        # against order.amount - refund_total, not the raw order amount,
+        # so a genuine partial refund is never misfiled as a fee mismatch
+        # or an unexplained gap.
+        match_order = order if refund_total == 0 else {
+            "amount": max(round(order["amount"] - refund_total, 2), 0.0),
+            "created_at": order["created_at"],
+        }
+        refund_suffix = f" (net of ₹{refund_total:,.2f} partial refund)" if refund_total > 0 else ""
+
         picked = None
         picked_stl = None
         for stl in candidate_settlements:
@@ -189,7 +226,7 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
             utr_matches = [b for b in unmatched_bank.values() if stl["utr"] in b["narration"]]
             if not utr_matches:
                 continue
-            result = _find_settlement_match(stl, order, utr_matches, fee_tolerance_pct, date_drift_ok_days)
+            result = _find_settlement_match(stl, match_order, utr_matches, fee_tolerance_pct, date_drift_ok_days)
             if result is None:
                 continue
             picked, picked_stl = result, stl
@@ -201,22 +238,22 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
             matches.append({
                 "order_id": order["order_id"], "settlement_id": stl["settlement_id"],
                 "bank_line_id": bank_line_ids[0], "bank_line_ids": bank_line_ids,
-                "method": method, "confidence": confidence, "note": note,
+                "method": method, "confidence": confidence, "note": note + refund_suffix,
             })
             resolved_settlement_ids.add(stl["settlement_id"])
             for bank_line_id in bank_line_ids:
                 unmatched_bank.pop(bank_line_id, None)
-            log("match", "matched", method, confidence, note, order_id=order["order_id"])
+            log("match", "matched", method, confidence, note + refund_suffix, order_id=order["order_id"])
         else:
             stl = candidate_settlements[0]
-            amount_diff_pct = abs(stl["amount"] - order["amount"]) / order["amount"]
+            amount_diff_pct = abs(stl["amount"] - match_order["amount"]) / (match_order["amount"] or order["amount"] or 1.0)
             if amount_diff_pct > fee_tolerance_pct:
                 # amount is genuinely off, not fee-sized -> not an LLM question
                 exceptions.append({
                     "type": "amount_mismatch", "order_id": order["order_id"],
                     "settlement_id": stl["settlement_id"],
                     "reason": f"Settlement amount {stl['amount']} differs from order "
-                              f"amount {order['amount']} by {amount_diff_pct:.1%}, "
+                              f"amount {order['amount']}{refund_suffix} by {amount_diff_pct:.1%}, "
                               "outside plausible Razorpay fee range.",
                 })
                 log("match", "exception", "rule", 1.0,
@@ -381,7 +418,7 @@ def apply_override(matches: list[dict], exceptions: list[dict], audit_trail: lis
     return {"matches": matches, "exceptions": exceptions, "audit_trail": audit_trail}
 
 
-def summarize(orders: list[dict], result: dict) -> dict:
+def summarize(orders: list[dict], result: dict, refunds: list[dict] | None = None) -> dict:
     total = len(orders)
     matched = len(result["matches"])
     by_method = {}
@@ -390,8 +427,33 @@ def summarize(orders: list[dict], result: dict) -> dict:
 
     amount_by_order_id = {o["order_id"]: o["amount"] for o in orders}
 
-    total_amount_matched = round(
-        sum(amount_by_order_id.get(m["order_id"], 0.0) for m in result["matches"]), 2)
+    # A refund isn't reconciled *settlement* money -- a fully refunded order
+    # had nothing settle at all, and a partially refunded one settled less
+    # than its order amount. Counting the full order amount as "reconciled"
+    # for those would overstate what actually moved, which is exactly the
+    # kind of claim this project is built to avoid making.
+    refund_total_by_order_id: dict[str, float] = {}
+    if refunds:
+        payment_id_by_order_id = {o["order_id"]: o["razorpay_payment_id"] for o in orders}
+        refund_total_by_payment: dict[str, float] = {}
+        for r in refunds:
+            refund_total_by_payment[r["payment_id"]] = round(
+                refund_total_by_payment.get(r["payment_id"], 0.0) + r["amount"], 2)
+        for order_id, payment_id in payment_id_by_order_id.items():
+            if payment_id in refund_total_by_payment:
+                refund_total_by_order_id[order_id] = refund_total_by_payment[payment_id]
+
+    total_amount_matched = 0.0
+    total_amount_refunded = 0.0
+    for m in result["matches"]:
+        order_amount = amount_by_order_id.get(m["order_id"], 0.0)
+        refund_amount = refund_total_by_order_id.get(m["order_id"], 0.0)
+        total_amount_refunded += refund_amount
+        if m["method"] == "refunded":
+            continue  # fully refunded -- zero net settlement money, correctly excluded
+        total_amount_matched += max(round(order_amount - refund_amount, 2), 0.0)
+    total_amount_matched = round(total_amount_matched, 2)
+    total_amount_refunded = round(total_amount_refunded, 2)
 
     # One order can carry more than one exception (e.g. a duplicate
     # settlement flagged alongside the order's own primary outcome) -- sum
@@ -412,6 +474,7 @@ def summarize(orders: list[dict], result: dict) -> dict:
         "exception_count": len(result["exceptions"]),
         "total_amount_matched": total_amount_matched,
         "total_amount_at_risk": total_amount_at_risk,
+        "total_amount_refunded": total_amount_refunded,
     }
 
 

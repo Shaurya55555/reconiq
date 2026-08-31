@@ -26,11 +26,11 @@ CUSTOMERS = [
 Anomaly = Literal[
     "clean", "fee_adjusted", "date_shifted", "missing_settlement",
     "duplicate_settlement", "garbled_narration", "amount_mismatch",
-    "split_settlement", "batch_settlement",
+    "split_settlement", "batch_settlement", "refunded", "partial_refund",
 ]
 
 ANOMALY_WEIGHTS = {
-    "clean": 0.44,
+    "clean": 0.34,
     "fee_adjusted": 0.10,
     "date_shifted": 0.06,
     "missing_settlement": 0.06,
@@ -39,6 +39,8 @@ ANOMALY_WEIGHTS = {
     "amount_mismatch": 0.04,
     "split_settlement": 0.09,
     "batch_settlement": 0.10,
+    "refunded": 0.05,
+    "partial_refund": 0.05,
 }
 
 
@@ -91,7 +93,7 @@ def generate_batch(n_orders: int = 70, seed: int | None = None,
     rng = random.Random(seed)
     weights = _weights_for_corruption_rate(corruption_rate) if corruption_rate is not None else ANOMALY_WEIGHTS
     base_date = datetime(2026, 8, 1)
-    orders, settlements, bank_lines = [], [], []
+    orders, settlements, bank_lines, refunds = [], [], [], []
 
     for i in range(1, n_orders + 1):
         order_id = f"ORD{1000 + i}"
@@ -116,9 +118,40 @@ def generate_batch(n_orders: int = 70, seed: int | None = None,
         if anomaly == "batch_settlement":
             continue  # handled after the loop, grouped with other batch_settlement orders
 
+        if anomaly == "refunded":
+            # Fully refunded before settlement -- genuinely how Razorpay
+            # behaves (a full refund nets the payout to zero, so no
+            # settlement is ever generated for it). No settlement, no bank
+            # line; the refund record itself is what explains the absence,
+            # so the matcher can tell this apart from a genuinely missing
+            # settlement rather than flagging it as an exception.
+            refunds.append({
+                "refund_id": f"rfnd_{rng.randint(10**9, 10**10 - 1)}",
+                "payment_id": payment_id,
+                "amount": amount,
+                "refunded_at": (created_at + timedelta(days=rng.randint(0, 3))).isoformat(),
+                "type": "full",
+            })
+            continue
+
         utr = _utr(rng)
         settled_at = created_at + timedelta(days=rng.randint(1, 2))
         net_amount = amount
+
+        if anomaly == "partial_refund":
+            # Partially refunded -- Razorpay nets the refund out of the
+            # settlement, so the settlement/bank amount below is genuinely
+            # order.amount - refund.amount, not a fee-sized discrepancy.
+            # Real money, real settlement, just smaller than the order.
+            refund_amount = round(amount * rng.uniform(0.1, 0.6), 2)
+            refunds.append({
+                "refund_id": f"rfnd_{rng.randint(10**9, 10**10 - 1)}",
+                "payment_id": payment_id,
+                "amount": refund_amount,
+                "refunded_at": (created_at + timedelta(days=rng.randint(0, 3))).isoformat(),
+                "type": "partial",
+            })
+            net_amount = round(amount - refund_amount, 2)
 
         if anomaly == "fee_adjusted":
             fee_pct = rng.uniform(0.015, 0.028)
@@ -185,7 +218,7 @@ def generate_batch(n_orders: int = 70, seed: int | None = None,
     _generate_batch_settlements(orders, settlements, bank_lines, rng)
 
     rng.shuffle(bank_lines)
-    return {"orders": orders, "settlements": settlements, "bank_lines": bank_lines}
+    return {"orders": orders, "settlements": settlements, "bank_lines": bank_lines, "refunds": refunds}
 
 
 def _generate_batch_settlements(orders: list[dict], settlements: list[dict],

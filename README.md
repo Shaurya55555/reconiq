@@ -58,8 +58,9 @@ ReconIQ closes that loop automatically on a batch of orders:
    `human_override` in the audit trail so it's never confused with an
    automated decision.
 7. **Bring your own data** — the same pipeline runs against uploaded
-   `orders.csv` / `settlements.csv` / `bank_lines.csv` (`POST
-   /api/run-upload`, or the dashboard's "Bring your own data" panel).
+   `orders.csv` / `settlements.csv` / `bank_lines.csv`, plus an optional
+   `refunds.csv` (`payment_id`, `amount`) (`POST /api/run-upload`, or the
+   dashboard's "Bring your own data" panel).
    Ground-truth accuracy is honestly omitted for uploaded data — there's
    no seeded truth label to score against — but match rate, amount at
    risk, and the exception list are still reported.
@@ -92,6 +93,12 @@ ReconIQ closes that loop automatically on a batch of orders:
    The exact numeric values a preset maps to stay visible and editable in
    an "Advanced" panel, never hidden, so a technical reviewer (or a judge)
    can always see precisely what a preset means and override it.
+10. **Refund-aware matching.** A full refund correctly resolves with no
+    settlement expected (`method: "refunded"`); a partial refund is
+    matched against `order.amount - refund.amount`, not the raw order
+    amount, so it's never misfiled as a fee mismatch. Refunded money is
+    tracked and shown separately, never counted as reconciled settlement
+    money. See "Refund-aware reconciliation" below for the full detail.
 
 ## Beyond 1:1 matching, in more depth
 
@@ -459,18 +466,42 @@ serverless function.
   combinatorial problem and isn't attempted — the two directions built
   cover the realistic cases; true N:M is noted here rather than
   quietly implied.
-- **Refund/chargeback-aware reconciliation.** A settlement that's
-  already matched can later be partially or fully clawed back by a
-  refund. Preserving that lineage (original settlement → refund →
-  net-retained amount) rather than treating the later bank debit as an
-  unrelated anomaly is the next concrete extension — not built yet.
+- **Chargeback-aware reconciliation.** Refunds (full and partial) are
+  now handled (see below) — a chargeback is a different animal (bank- or
+  card-network-initiated, adversarial, with its own dispute lifecycle
+  and timing) and is deliberately scoped out of v1 rather than folded
+  into the refund pass just because both involve money going backward.
+
+**10. Refund-aware reconciliation (full and partial).** A refund isn't
+noise to explain away — it genuinely changes what settlement amount is
+*expected*. ReconIQ now models both cases the way Razorpay actually
+behaves:
+- **Full refund:** Razorpay never generates a settlement for a fully
+  refunded payment. ReconIQ recognizes this via the refund record and
+  resolves the order as `method: "refunded"` (not an exception) — a
+  `no_settlement_found` exception is reserved for genuinely unexplained
+  gaps, never for a refund that fully accounts for the absence.
+- **Partial refund:** the settlement/bank credit is genuinely
+  `order.amount - refund.amount`, not a fee-sized discrepancy. ReconIQ
+  matches against that net amount, so a correctly-processed partial
+  refund is never misfiled as `amount_mismatch`.
+- A refund only ever explains the gap it actually accounts for —
+  `test_refund_does_not_mask_a_genuine_amount_mismatch` locks in that a
+  refund can't paper over an unrelated, genuine discrepancy.
+- Refunded money is tracked separately (`total_amount_refunded`) and
+  explicitly excluded from "amount reconciled" — counting a fully
+  refunded order's original amount as reconciled settlement money would
+  overstate what actually settled, which this project exists to avoid
+  doing.
+- Works for uploaded data too via an optional `refunds.csv`
+  (`payment_id`, `amount`) alongside the three required files.
 
 **Explicitly out of scope — deliberately not built, not a gap:**
 
-Cash-position/cash-forecasting, reconciliation aging as a standalone
-view, a general-purpose finance chatbot, payroll, invoicing, tax
-workflows, expense management, or any other accounting product. Track 4
-asks for one finance-ops loop done credibly — throughput, measured
-accuracy, honest exceptions — not a broader finance suite. Every one of
-those would dilute that story rather than strengthen it; rejected on
-purpose, not for lack of time.
+Chargebacks (see above), cash-position/cash-forecasting, reconciliation
+aging as a standalone view, a general-purpose finance chatbot, payroll,
+invoicing, tax workflows, expense management, or any other accounting
+product. Track 4 asks for one finance-ops loop done credibly —
+throughput, measured accuracy, honest exceptions — not a broader
+finance suite. Every one of those would dilute that story rather than
+strengthen it; rejected on purpose, not for lack of time.

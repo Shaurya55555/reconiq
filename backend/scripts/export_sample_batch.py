@@ -30,14 +30,16 @@ def write_csv(path: Path, rows: list[dict]):
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     batch = data_gen.generate_batch(n_orders=100, seed=5)
-    rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"])
+    rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                     refunds=batch["refunds"])
     final = matcher.apply_llm_resolutions(rule_result, llm_resolver.resolve)
-    summary = matcher.summarize(batch["orders"], final)
+    summary = matcher.summarize(batch["orders"], final, refunds=batch["refunds"])
     ground_truth = scoring.score_against_ground_truth(batch["orders"], final)
 
     write_csv(OUT_DIR / "orders.csv", batch["orders"])
     write_csv(OUT_DIR / "settlements.csv", batch["settlements"])
     write_csv(OUT_DIR / "bank_lines.csv", batch["bank_lines"])
+    write_csv(OUT_DIR / "refunds.csv", batch["refunds"])
     write_csv(OUT_DIR / "matches.csv", final["matches"])
     write_csv(OUT_DIR / "exceptions.csv", final["exceptions"])
     write_csv(OUT_DIR / "audit_trail.csv", final["audit_trail"])

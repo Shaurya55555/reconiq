@@ -25,6 +25,21 @@ def test_run_endpoint_returns_full_stateless_payload():
         assert "amount" in e
 
 
+def test_run_endpoint_includes_refunds_and_resolves_them_without_exceptions():
+    res = client.post("/api/run", json={"n_orders": 250, "seed": 99})
+    assert res.status_code == 200
+    body = res.json()
+    assert "refunds" in body
+    assert body["refunds"], "expected at least one refund at this seed"
+    assert "total_amount_refunded" in body["summary"]
+
+    refunded_payment_ids = {r["payment_id"] for r in body["refunds"] if r["type"] == "full"}
+    refunded_order_ids = {o["order_id"] for o in body["orders"]
+                           if o["razorpay_payment_id"] in refunded_payment_ids}
+    matched_order_ids = {m["order_id"] for m in body["matches"]}
+    assert refunded_order_ids <= matched_order_ids
+
+
 def test_run_endpoint_respects_custom_materiality_threshold():
     # a very low threshold should make even small exceptions "high" priority
     # and therefore block the closing verdict, if there are any exceptions at all

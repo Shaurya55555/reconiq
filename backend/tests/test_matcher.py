@@ -10,7 +10,8 @@ from app import data_gen, llm_resolver, matcher, scoring
 
 def run_pipeline(n_orders=120, seed=42):
     batch = data_gen.generate_batch(n_orders=n_orders, seed=seed)
-    rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"])
+    rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                     refunds=batch["refunds"])
     final = matcher.apply_llm_resolutions(rule_result, llm_resolver.resolve)
     return batch, rule_result, final
 
@@ -109,11 +110,25 @@ def test_amount_at_risk_counts_each_order_once_even_with_multiple_exceptions():
 
 
 def test_amount_matched_sums_only_matched_orders():
+    """A refunded (method="refunded") order contributes zero net settlement
+    money even though it's matched -- nothing settled for it. A
+    partial-refund order contributes order.amount minus its refund, not
+    the raw order amount -- that's genuinely what settled."""
     batch, _, final = run_pipeline(n_orders=50, seed=3)
-    summary = matcher.summarize(batch["orders"], final)
+    summary = matcher.summarize(batch["orders"], final, refunds=batch["refunds"])
     amount_by_id = {o["order_id"]: o["amount"] for o in batch["orders"]}
-    expected = round(sum(amount_by_id[m["order_id"]] for m in final["matches"]), 2)
-    assert summary["total_amount_matched"] == expected
+    payment_id_by_order_id = {o["order_id"]: o["razorpay_payment_id"] for o in batch["orders"]}
+    refund_by_payment: dict[str, float] = {}
+    for r in batch["refunds"]:
+        refund_by_payment[r["payment_id"]] = refund_by_payment.get(r["payment_id"], 0.0) + r["amount"]
+
+    expected = 0.0
+    for m in final["matches"]:
+        if m["method"] == "refunded":
+            continue
+        refund = refund_by_payment.get(payment_id_by_order_id[m["order_id"]], 0.0)
+        expected += max(amount_by_id[m["order_id"]] - refund, 0.0)
+    assert summary["total_amount_matched"] == round(expected, 2)
 
 
 def test_override_accept_match_bumps_confidence_and_logs_human_override():
@@ -476,3 +491,106 @@ def test_closing_verdict_allows_close_with_zero_exceptions():
     verdict = matcher.closing_verdict([], materiality_threshold=5000.0)
     assert verdict["can_close"] is True
     assert "no material" in verdict["message"].lower()
+
+
+# ---- refund-aware reconciliation ----
+
+def test_full_refund_resolves_without_settlement_and_without_exception():
+    """A fully refunded order genuinely has no settlement in real Razorpay
+    data -- the refund record is what explains the absence, so this must
+    resolve as method="refunded", not surface as a no_settlement_found
+    exception."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    refund = {"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 1000.0,
+              "refunded_at": "2026-08-02T00:00:00", "type": "full"}
+    result = matcher.reconcile([order], [], [], refunds=[refund])
+    assert not result["exceptions"]
+    assert len(result["matches"]) == 1
+    assert result["matches"][0]["method"] == "refunded"
+
+
+def test_partial_refund_matches_against_net_of_refund_amount():
+    """A partial refund genuinely shrinks the settlement -- order.amount
+    minus refund.amount -- so the settlement/bank credit for that smaller
+    amount must match cleanly, not surface as a fee-tolerance-busting
+    amount_mismatch."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    refund = {"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 400.0,
+              "refunded_at": "2026-08-01T12:00:00", "type": "partial"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
+                  "amount": 600.0, "settled_at": "2026-08-02"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT",
+                   "amount": 600.0, "value_date": "2026-08-02"}]
+    result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])
+    assert not result["exceptions"]
+    assert len(result["matches"]) == 1
+    match = result["matches"][0]
+    assert match["method"] == "exact"
+    assert "refund" in match["note"].lower()
+
+
+def test_refund_does_not_mask_a_genuine_amount_mismatch():
+    """A refund only explains a gap it actually accounts for. If the
+    settlement amount is wrong even after netting out the refund, this
+    must still surface as amount_mismatch -- the refund record must never
+    become a blanket excuse for any discrepancy."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    refund = {"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 400.0,
+              "refunded_at": "2026-08-01T12:00:00", "type": "partial"}
+    # expected net is 600, but the settlement is only 450 -- a genuine
+    # mismatch on top of the refund, not explained by it
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
+                  "amount": 450.0, "settled_at": "2026-08-02"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT",
+                   "amount": 450.0, "value_date": "2026-08-02"}]
+    result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])
+    assert not result["matches"]
+    assert any(e["type"] == "amount_mismatch" for e in result["exceptions"])
+
+
+def test_partial_refund_with_no_settlement_still_surfaces_as_exception():
+    """A refund that doesn't cover the full order amount can't explain a
+    missing settlement on its own -- this must stay a no_settlement_found
+    exception, not be waved through as "refunded"."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    refund = {"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 400.0,
+              "refunded_at": "2026-08-01T12:00:00", "type": "partial"}
+    result = matcher.reconcile([order], [], [], refunds=[refund])
+    assert not result["matches"]
+    assert any(e["type"] == "no_settlement_found" for e in result["exceptions"])
+
+
+def test_summarize_excludes_refunded_orders_from_amount_reconciled():
+    """A fully refunded order's original amount must never be counted as
+    reconciled settlement money -- nothing settled for it. It should show
+    up only in total_amount_refunded, not total_amount_matched."""
+    orders = [{"order_id": "ORD1", "amount": 1000.0, "razorpay_payment_id": "pay_1"}]
+    result = {
+        "matches": [{"order_id": "ORD1", "method": "refunded", "settlement_id": None,
+                     "bank_line_id": None, "confidence": 1.0, "note": "fully refunded"}],
+        "exceptions": [],
+    }
+    refunds = [{"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 1000.0,
+                "refunded_at": "2026-08-02", "type": "full"}]
+    summary = matcher.summarize(orders, result, refunds=refunds)
+    assert summary["total_amount_matched"] == 0.0
+    assert summary["total_amount_refunded"] == 1000.0
+
+
+def test_generated_refund_and_partial_refund_orders_resolve_correctly_end_to_end():
+    """Full pipeline sanity check: refunded/partial_refund orders seeded by
+    data_gen must actually resolve as "matched" (via method "refunded" or
+    a normal settlement method), never as an exception, once refunds are
+    threaded through reconcile()."""
+    batch, _, final = run_pipeline(n_orders=250, seed=99)
+    matched_order_ids = {m["order_id"] for m in final["matches"]}
+    refunded_order_ids = {o["order_id"] for o in batch["orders"] if o["_truth"] == "refunded"}
+    partial_refund_order_ids = {o["order_id"] for o in batch["orders"] if o["_truth"] == "partial_refund"}
+    assert refunded_order_ids, "expected at least one fully refunded order at this seed"
+    assert partial_refund_order_ids, "expected at least one partially refunded order at this seed"
+    assert refunded_order_ids <= matched_order_ids
+    assert partial_refund_order_ids <= matched_order_ids
