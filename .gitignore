@@ -9,8 +9,9 @@ node_modules/
 .vercel
 .env*
 
-# Private judge Q&A prep -- not for the public repo
+# Private prep docs -- not for the public repo
 docs/judge_qna.md
+docs/EXPLAINED_SIMPLY.md
 
 # Output of the offline Razorpay adapter script -- may contain real
 # settlement data if run against live/test account data
