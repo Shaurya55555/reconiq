@@ -26,18 +26,19 @@ CUSTOMERS = [
 Anomaly = Literal[
     "clean", "fee_adjusted", "date_shifted", "missing_settlement",
     "duplicate_settlement", "garbled_narration", "amount_mismatch",
-    "split_settlement",
+    "split_settlement", "batch_settlement",
 ]
 
 ANOMALY_WEIGHTS = {
-    "clean": 0.50,
-    "fee_adjusted": 0.11,
-    "date_shifted": 0.07,
-    "missing_settlement": 0.07,
+    "clean": 0.44,
+    "fee_adjusted": 0.10,
+    "date_shifted": 0.06,
+    "missing_settlement": 0.06,
     "duplicate_settlement": 0.05,
-    "garbled_narration": 0.07,
+    "garbled_narration": 0.06,
     "amount_mismatch": 0.04,
     "split_settlement": 0.09,
+    "batch_settlement": 0.10,
 }
 
 
@@ -112,6 +113,9 @@ def generate_batch(n_orders: int = 70, seed: int | None = None,
         if anomaly == "missing_settlement":
             continue  # no settlement row at all -> should surface as exception
 
+        if anomaly == "batch_settlement":
+            continue  # handled after the loop, grouped with other batch_settlement orders
+
         utr = _utr(rng)
         settled_at = created_at + timedelta(days=rng.randint(1, 2))
         net_amount = amount
@@ -178,5 +182,48 @@ def generate_batch(n_orders: int = 70, seed: int | None = None,
                 "_utr_hint": utr,
             })
 
+    _generate_batch_settlements(orders, settlements, bank_lines, rng)
+
     rng.shuffle(bank_lines)
     return {"orders": orders, "settlements": settlements, "bank_lines": bank_lines}
+
+
+def _generate_batch_settlements(orders: list[dict], settlements: list[dict],
+                                 bank_lines: list[dict], rng: random.Random) -> None:
+    """Real Razorpay behaviour, not an invented mechanism: a settlement
+    commonly covers *multiple* payments batched together, settled as one
+    bank credit under one UTR -- this is the mirror of split_settlement
+    (there, one settlement arrives as many bank lines; here, many orders'
+    payments arrive as one settlement). Modelling it this way (one real
+    settlement row with a payment_ids list) is simpler and more honest
+    than contriving a bank narration that somehow embeds several UTRs,
+    which isn't how bank statements actually look.
+    """
+    pending = [o for o in orders if o["_truth"] == "batch_settlement"]
+    i = 0
+    while i < len(pending):
+        remaining = len(pending) - i
+        group_size = 1 if remaining == 1 else rng.choice([2, 3]) if remaining >= 3 else 2
+        group = pending[i:i + group_size]
+        i += group_size
+
+        total_amount = round(sum(o["amount"] for o in group), 2)
+        utr = _utr(rng)
+        earliest_created = min(datetime.fromisoformat(o["created_at"]) for o in group)
+        settled_at = earliest_created + timedelta(days=rng.randint(1, 2))
+
+        settlements.append({
+            "settlement_id": f"stl_{rng.randint(10**9, 10**10 - 1)}",
+            "payment_id": group[0]["razorpay_payment_id"],  # backward-compatible single reference
+            "payment_ids": [o["razorpay_payment_id"] for o in group],
+            "utr": utr,
+            "amount": total_amount,
+            "settled_at": settled_at.isoformat(),
+        })
+        bank_lines.append({
+            "line_id": f"bl_{rng.randint(10**9, 10**10 - 1)}",
+            "narration": f"NEFT-{utr}-RAZORPAY SETTLEMENT BATCH {len(group)} ORDERS",
+            "amount": total_amount,
+            "value_date": settled_at.date().isoformat(),
+            "_utr_hint": utr,
+        })

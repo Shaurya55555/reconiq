@@ -89,9 +89,14 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
     for o in orders:
         orders_by_payment.setdefault(o["razorpay_payment_id"], []).append(o)
 
+    # A settlement normally covers one payment_id, but a batch settlement
+    # (multiple payments consolidated by Razorpay into one settlement,
+    # settled as one bank credit) legitimately covers several -- index it
+    # under every payment_id it covers so any of those orders can find it.
     settlements_by_payment: dict[str, list[dict]] = {}
     for s in settlements:
-        settlements_by_payment.setdefault(s["payment_id"], []).append(s)
+        for payment_id in s.get("payment_ids") or [s["payment_id"]]:
+            settlements_by_payment.setdefault(payment_id, []).append(s)
 
     unmatched_bank = {b["line_id"]: b for b in bank_lines}
     resolved_settlement_ids: set[str] = set()
@@ -103,8 +108,51 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
             "confidence": confidence, "note": note, **ids,
         })
 
+    # ---- pass 0: batch settlements (many orders : one settlement : one
+    # bank line). Handled as a single unit first, so the per-payment_id
+    # loop below never sees these payment_ids as unresolved individually.
+    handled_payment_ids: set[str] = set()
+    seen_batch_settlement_ids: set[str] = set()
+    for stl in settlements:
+        covered_ids = stl.get("payment_ids") or [stl["payment_id"]]
+        if len(covered_ids) <= 1 or stl["settlement_id"] in seen_batch_settlement_ids:
+            continue
+        seen_batch_settlement_ids.add(stl["settlement_id"])
+
+        group_orders = [orders_by_payment[pid][0] for pid in covered_ids if pid in orders_by_payment]
+        if not group_orders:
+            continue
+        agg_order = {"amount": sum(o["amount"] for o in group_orders),
+                     "created_at": min(o["created_at"] for o in group_orders)}
+
+        utr_matches = [b for b in unmatched_bank.values() if stl["utr"] in b["narration"]]
+        if not utr_matches:
+            continue  # falls through to the normal per-order loop below, which will
+                       # surface this honestly (as amount_mismatch or an exception)
+                       # rather than silently dropping the group
+
+        result = _find_settlement_match(stl, agg_order, utr_matches, fee_tolerance_pct, date_drift_ok_days)
+        if result is None:
+            continue
+
+        method, confidence, note, bank_line_ids = result
+        group_note = f"Part of a batch settlement covering {len(group_orders)} orders. {note}"
+        for o in group_orders:
+            matches.append({
+                "order_id": o["order_id"], "settlement_id": stl["settlement_id"],
+                "bank_line_id": bank_line_ids[0], "bank_line_ids": bank_line_ids,
+                "method": "batch_settlement", "confidence": confidence, "note": group_note,
+            })
+            handled_payment_ids.add(o["razorpay_payment_id"])
+            log("match", "matched", "batch_settlement", confidence, group_note, order_id=o["order_id"])
+        resolved_settlement_ids.add(stl["settlement_id"])
+        for bank_line_id in bank_line_ids:
+            unmatched_bank.pop(bank_line_id, None)
+
     # ---- pass 1 & 2: rule-based, per payment_id ----
     for payment_id, orders_for_payment in orders_by_payment.items():
+        if payment_id in handled_payment_ids:
+            continue
         order = orders_for_payment[0]
 
         # Two orders should never share a payment_id in real Razorpay data,

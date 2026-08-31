@@ -23,6 +23,7 @@ EXPECTED_OUTCOME = {
     "garbled_narration": "matched",
     "duplicate_settlement": "matched",
     "split_settlement": "matched",
+    "batch_settlement": "matched",
     "missing_settlement": "exception",
     "amount_mismatch": "exception",
 }

@@ -335,3 +335,90 @@ def test_group_split_only_combines_lines_sharing_the_settlement_utr():
     ]
     result = matcher.reconcile([order], [settlement], bank_lines)
     assert not result["matches"]
+
+
+# ---- many-to-one, the mirror direction (batch settlement: N orders : 1 settlement : 1 bank line) ----
+
+def test_batch_settlement_orders_are_resolved_without_llm():
+    """batch_settlement orders share one real settlement record covering
+    multiple payment_ids (modelling Razorpay's actual batch-settlement
+    behaviour), matched to one bank line. Must resolve entirely in the
+    rule pass -- no LLM needed, since the settlement's own UTR ties the
+    group to its bank line deterministically."""
+    batch = data_gen.generate_batch(n_orders=200, seed=99)
+    batch_order_ids = {o["order_id"] for o in batch["orders"] if o["_truth"] == "batch_settlement"}
+    assert batch_order_ids, "expected at least one batch_settlement order at this seed"
+
+    rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"])
+    matched_by_rules = {m["order_id"]: m for m in rule_result["matches"]}
+
+    for order_id in batch_order_ids:
+        assert order_id in matched_by_rules, f"{order_id} should resolve in the rule pass alone"
+        assert matched_by_rules[order_id]["method"] == "batch_settlement"
+
+
+def test_batch_settlement_matches_every_member_order_to_the_shared_settlement():
+    orders = [
+        {"order_id": "ORD1", "customer": "A", "amount": 400.0,
+         "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"},
+        {"order_id": "ORD2", "customer": "B", "amount": 600.0,
+         "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_2"},
+        {"order_id": "ORD3", "customer": "C", "amount": 300.0,
+         "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_3"},
+    ]
+    settlement = {
+        "settlement_id": "stl1", "payment_id": "pay_1", "payment_ids": ["pay_1", "pay_2", "pay_3"],
+        "utr": "UTR700800900", "amount": 1300.0, "settled_at": "2026-08-02",
+    }
+    bank_lines = [
+        {"line_id": "bl_batch", "narration": "NEFT-UTR700800900-RAZORPAY SETTLEMENT BATCH 3 ORDERS",
+         "amount": 1300.0, "value_date": "2026-08-02"},
+    ]
+    result = matcher.reconcile(orders, [settlement], bank_lines)
+    assert len(result["matches"]) == 3
+    assert {m["order_id"] for m in result["matches"]} == {"ORD1", "ORD2", "ORD3"}
+    for m in result["matches"]:
+        assert m["method"] == "batch_settlement"
+        assert m["bank_line_ids"] == ["bl_batch"]
+        assert m["settlement_id"] == "stl1"
+    assert not result["exceptions"]
+
+
+def test_batch_settlement_does_not_falsely_match_when_amounts_dont_sum():
+    """If the individual orders' amounts don't actually add up to the
+    settlement's reported amount, that's a genuine discrepancy -- it
+    must surface honestly, never be silently waved through."""
+    orders = [
+        {"order_id": "ORD1", "customer": "A", "amount": 400.0,
+         "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"},
+        {"order_id": "ORD2", "customer": "B", "amount": 600.0,
+         "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_2"},
+    ]
+    settlement = {
+        "settlement_id": "stl1", "payment_id": "pay_1", "payment_ids": ["pay_1", "pay_2"],
+        "utr": "UTR700800900", "amount": 1300.0,  # should be 1000.0 -- deliberately wrong
+        "settled_at": "2026-08-02",
+    }
+    bank_lines = [
+        {"line_id": "bl_batch", "narration": "NEFT-UTR700800900-RAZORPAY SETTLEMENT BATCH 2 ORDERS",
+         "amount": 1300.0, "value_date": "2026-08-02"},
+    ]
+    result = matcher.reconcile(orders, [settlement], bank_lines)
+    assert not any(m["method"] == "batch_settlement" for m in result["matches"])
+    assert result["exceptions"], "a batch settlement whose total doesn't match its members must not be silently accepted"
+
+
+def test_batch_and_split_settlements_coexist_in_the_same_batch():
+    """The two mirror-direction group-matching passes (batch_settlement
+    and group_split) must not interfere with each other when both
+    anomaly types appear in the same synthetic batch."""
+    batch = data_gen.generate_batch(n_orders=300, seed=7)
+    truths_present = {o["_truth"] for o in batch["orders"]}
+    assert "batch_settlement" in truths_present
+    assert "split_settlement" in truths_present
+
+    rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"])
+    final = matcher.apply_llm_resolutions(rule_result, llm_resolver.resolve)
+    methods_used = {m["method"] for m in final["matches"]}
+    assert "batch_settlement" in methods_used
+    assert "group_split" in methods_used
