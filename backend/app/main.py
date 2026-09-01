@@ -166,12 +166,15 @@ def run_reconciliation(req: RunRequest):
     rules_only_ground_truth = scoring.score_against_ground_truth(batch["orders"], rules_only)
     _apply_ground_truth_to_summary(rules_only_summary, rules_only_ground_truth)
 
+    t_llm = time.perf_counter()
     final = matcher.apply_llm_resolutions(rule_result, llm_resolver.resolve, confidence_threshold=threshold)
+    llm_elapsed = time.perf_counter() - t_llm
     elapsed = time.perf_counter() - t0
 
     summary = matcher.summarize(batch["orders"], final, refunds=batch["refunds"])
     summary["throughput_records_per_sec"] = round(req.n_orders / elapsed, 1) if elapsed > 0 else None
     summary["elapsed_seconds"] = round(elapsed, 3)
+    summary["llm_elapsed_seconds"] = round(llm_elapsed, 3)
     summary["llm_provider"] = os.getenv("LLM_PROVIDER", "heuristic (offline fallback)")
     summary["confidence_threshold"] = threshold
     summary["fee_tolerance_pct"] = req.fee_tolerance_pct
@@ -330,12 +333,15 @@ def run_uploaded_data(req: UploadRunRequest):
                                      fee_tolerance_pct=req.fee_tolerance_pct,
                                      date_drift_ok_days=req.date_drift_ok_days,
                                      refunds=refunds)
+    t_llm = time.perf_counter()
     final = matcher.apply_llm_resolutions(rule_result, llm_resolver.resolve, confidence_threshold=threshold)
+    llm_elapsed = time.perf_counter() - t_llm
     elapsed = time.perf_counter() - t0
 
     summary = matcher.summarize(orders, final, refunds=refunds)
     summary["throughput_records_per_sec"] = round(len(orders) / elapsed, 1) if elapsed > 0 else None
     summary["elapsed_seconds"] = round(elapsed, 3)
+    summary["llm_elapsed_seconds"] = round(llm_elapsed, 3)
     summary["llm_provider"] = os.getenv("LLM_PROVIDER", "heuristic (offline fallback)")
     summary["confidence_threshold"] = threshold
     summary["fee_tolerance_pct"] = req.fee_tolerance_pct

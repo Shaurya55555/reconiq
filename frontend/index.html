@@ -5,68 +5,73 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ReconIQ - AI Finance Controller</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%AE%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
   :root {
-    --bg: #0a0e13; --bg2: #0d1218; --panel: #131a22; --panel2: #161e28; --border: #232d38;
-    --border-soft: #1a232d; --text: #e9eef3; --muted: #8b98a5; --muted2: #6b7686;
-    --accent: #4fd1c5; --accent-dim: #2a4d49; --bad: #f47174; --warn: #f2c94c; --good: #6fcf97;
-    --radius: 12px;
+    --bg: #0d0c0a; --bg2: #110f0d; --panel: #17140f; --panel2: #1c1812; --border: #2c2721;
+    --border-soft: #201c17; --text: #f1ece2; --muted: #a89d89; --muted2: #7d7360;
+    --accent: #7b6ff0; --accent-ink: #5849d9; --accent-dim: #26204d; --bad: #ef7570; --warn: #dfae52; --good: #6fcf97;
+    --sans: 'IBM Plex Sans', -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+    --radius: 9px;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font-family: -apple-system, "Segoe UI", Roboto, sans-serif; line-height: 1.45;
-    background-image: radial-gradient(ellipse 900px 500px at 50% -10%, rgba(79,209,197,0.08), transparent);
+    font-family: var(--sans); line-height: 1.5;
+    background-image: radial-gradient(ellipse 900px 480px at 50% -10%, rgba(123,111,240,0.07), transparent);
   }
   header { padding: 20px 32px; border-bottom: 1px solid var(--border-soft); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
   header .brand { display: flex; align-items: center; gap: 10px; }
-  header .brand-mark { font-size: 22px; }
-  header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+  header .brand-mark { flex-shrink: 0; }
+  header h1 { margin: 0; font-family: var(--mono); font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
   header p { margin: 1px 0 0; color: var(--muted2); font-size: 12px; }
   main { max-width: 1080px; margin: 0 auto; padding: 0 32px 48px; }
   button {
-    background: var(--accent); color: #04211d; border: none; padding: 12px 22px; border-radius: 8px;
-    font-weight: 700; font-size: 14px; cursor: pointer; transition: transform 0.1s ease, box-shadow 0.15s ease, opacity 0.15s ease;
-    box-shadow: 0 2px 12px rgba(79,209,197,0.15);
+    background: var(--accent-ink); color: #f5f3ff; border: none; padding: 12px 22px; border-radius: 7px;
+    font-family: var(--mono); font-weight: 600; font-size: 13px; letter-spacing: 0.01em; cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
   }
-  button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(79,209,197,0.25); }
-  button:active:not(:disabled) { transform: translateY(0); }
+  button:hover:not(:disabled) { background: var(--accent); }
+  button:active:not(:disabled) { background: var(--accent-ink); }
   button.secondary {
     background: var(--panel2); color: var(--text); border: 1px solid var(--border); font-weight: 500;
-    padding: 8px 14px; box-shadow: none;
+    padding: 8px 14px;
   }
-  button.secondary:hover:not(:disabled) { border-color: var(--accent-dim); transform: none; box-shadow: none; }
-  button:disabled { opacity: 0.5; cursor: default; transform: none !important; box-shadow: none !important; }
+  button.secondary:hover:not(:disabled) { border-color: var(--accent-ink); }
+  button:disabled { opacity: 0.5; cursor: default; }
   input[type=number], input[type=text] {
     background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 8px 10px;
-    border-radius: 7px; font-size: 13px; transition: border-color 0.15s ease;
+    border-radius: 6px; font-family: var(--mono); font-size: 13px; transition: border-color 0.15s ease;
   }
-  input[type=number]:focus, input[type=text]:focus { outline: none; border-color: var(--accent-dim); }
+  input[type=number]:focus, input[type=text]:focus { outline: none; border-color: var(--accent-ink); }
   .row { display: flex; gap: 14px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
   .row label { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
   .card {
-    background: linear-gradient(180deg, var(--panel2), var(--panel)); border: 1px solid var(--border);
+    background: var(--panel); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 16px 18px; transition: border-color 0.2s ease;
   }
-  .card:hover { border-color: var(--border-soft); }
+  .card:hover { border-color: var(--muted2); }
   .card.big { padding: 20px 22px; }
   .card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
-  .card .value { font-size: 25px; font-weight: 800; margin-top: 8px; letter-spacing: -0.01em; }
-  .card.big .value { font-size: 30px; }
+  .card .value { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 24px; font-weight: 600; margin-top: 8px; letter-spacing: -0.01em; }
+  .card.big .value { font-size: 29px; }
   .value.good { color: var(--good); } .value.warn { color: var(--warn); } .value.bad { color: var(--bad); }
   .cards-group-label {
-    font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.08em;
-    font-weight: 700; margin: 22px 0 10px;
+    font-family: var(--mono); font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.08em;
+    font-weight: 600; margin: 22px 0 10px;
   }
   section { margin-bottom: 28px; }
   h2 {
-    font-size: 14px; color: var(--text); text-transform: none; letter-spacing: 0; font-weight: 700;
+    font-family: var(--mono); font-size: 14px; color: var(--text); text-transform: none; letter-spacing: 0; font-weight: 600;
     border-bottom: 1px solid var(--border-soft); padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center;
   }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border-soft); }
-  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+  td { font-variant-numeric: tabular-nums; }
+  th { font-family: var(--mono); color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
   tr:hover td { background: var(--panel2); }
   .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
   .tag.exact { background: #123a35; color: var(--good); }
@@ -130,7 +135,7 @@
     text-align: center; padding: 56px 20px; color: var(--muted); border: 1px dashed var(--border);
     border-radius: var(--radius); font-size: 14px;
   }
-  .empty-state .icon { font-size: 32px; margin-bottom: 10px; opacity: 0.6; }
+  .empty-state .icon { display: block; margin: 0 auto 12px; color: var(--muted2); }
 
   .validation-section { border-top: 1px solid var(--border-soft); padding-top: 28px; margin-top: 8px; }
   .validation-eyebrow { font-size: 11px; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 6px; }
@@ -158,10 +163,12 @@
     display: flex; align-items: center; gap: 14px; padding: 18px 22px; border-radius: var(--radius);
     margin-bottom: 24px; font-size: 14px;
   }
-  .verdict-banner.can-close { background: #123a2f; border: 1px solid #1d5c46; }
-  .verdict-banner.cannot-close { background: #3a2a12; border: 1px solid #5c4a1d; }
-  .verdict-icon { font-size: 26px; }
-  .verdict-title { font-weight: 800; font-size: 15px; margin-bottom: 2px; }
+  .verdict-banner.can-close { background: #142b21; border: 1px solid #1f4534; }
+  .verdict-banner.cannot-close { background: #2e2412; border: 1px solid #4d3c1a; }
+  .verdict-icon { flex-shrink: 0; }
+  .verdict-banner.can-close .verdict-icon { color: var(--good); }
+  .verdict-banner.cannot-close .verdict-icon { color: var(--warn); }
+  .verdict-title { font-family: var(--mono); font-weight: 600; font-size: 15px; margin-bottom: 2px; }
   .verdict-banner.can-close .verdict-title { color: var(--good); }
   .verdict-banner.cannot-close .verdict-title { color: var(--warn); }
   .verdict-message { color: var(--text); font-size: 13px; }
@@ -194,7 +201,10 @@
 <body>
 <header>
   <div class="brand">
-    <span class="brand-mark">🧮</span>
+    <svg class="brand-mark" width="22" height="22" viewBox="0 0 24 24" fill="none">
+      <rect x="2" y="2" width="20" height="20" rx="4" fill="var(--accent-ink)"/>
+      <path d="M7 12h4M7 8h10M7 16h7" stroke="#f5f3ff" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>
     <div>
       <h1>ReconIQ</h1>
       <p>AI Finance Controller &middot; orders &times; Razorpay settlements &times; bank statement</p>
@@ -283,7 +293,10 @@
   </section>
 
   <div class="empty-state" id="empty-state">
-    <div class="icon">📊</div>
+    <svg class="icon" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+      <rect x="3.5" y="3.5" width="17" height="17" rx="2"/>
+      <path d="M7.5 8h9M7.5 12h9M7.5 16h5.5" stroke-linecap="round"/>
+    </svg>
     No run yet &mdash; click <strong>Run Controller</strong> above to reconcile a live batch.
   </div>
 
@@ -315,6 +328,7 @@
     <div class="card"><div class="label" title="Transaction count successfully auto-resolved out of the total batch">Matched</div><div class="value" id="c-matched">--</div></div>
     <div class="card"><div class="label" title="Transactions ReconIQ could not confidently resolve and flagged for review instead of guessing">Exceptions</div><div class="value" id="c-exceptions">--</div></div>
     <div class="card"><div class="label" title="How fast the batch was processed, in records per second">Throughput</div><div class="value" id="c-throughput">--</div></div>
+    <div class="card" id="ai-response-time-card" style="display:none"><div class="label" title="Total time spent waiting on the AI provider this run -- sequential calls, one per case the deterministic rules couldn't resolve. This is almost always the slowest part of a run; the matching logic itself runs in under a millisecond regardless of batch size.">AI response time</div><div class="value" id="c-ai-response-time">--</div></div>
   </div>
   <p id="accuracy-note" style="display:none; color:var(--muted); font-size:12px; margin:-8px 0 20px">
     Verified accuracy is scored against the known-correct label seeded into each synthetic order
@@ -445,6 +459,13 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const pct = (x) => (x * 100).toFixed(1) + "%";
 const rupees = (x) => "₹" + Number(x).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+function formatDuration(totalSeconds) {
+  if (totalSeconds < 1) return `${Math.round(totalSeconds * 1000)}ms`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds - minutes * 60;
+  if (minutes === 0) return `${seconds.toFixed(1)}s`;
+  return `${minutes}m ${Math.round(seconds)}s`;
+}
 const tagFor = (method) => `<span class="tag ${esc(method)}">${esc(method)}</span>`;
 
 const METHOD_COLORS = { exact: "#6fcf97", fuzzy: "#f2c94c", group_split: "#56c8e0", batch_settlement: "#7ee08a", refunded: "#b39ddb", llm: "#7aa2f7", human_override: "#c792ea" };
@@ -605,7 +626,9 @@ function renderVerdict(verdict) {
   if (!verdict) { $("verdict-banner").style.display = "none"; return; }
   const banner = $("verdict-banner");
   banner.className = "verdict-banner " + (verdict.can_close ? "can-close" : "cannot-close");
-  $("verdict-icon").textContent = verdict.can_close ? "✅" : "⚠️";
+  $("verdict-icon").innerHTML = verdict.can_close
+    ? `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9.5"/><path d="M8 12.5l2.5 2.5L16 9.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+    : `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3.5l9.5 16.5H2.5L12 3.5z" stroke-linejoin="round"/><path d="M12 10v4.5" stroke-linecap="round"/><circle cx="12" cy="17.3" r="0.9" fill="currentColor" stroke="none"/></svg>`;
   $("verdict-title").textContent = verdict.can_close ? "Safe to close" : "Review before closing";
   $("verdict-message").textContent = verdict.message;
   banner.style.display = "flex";
@@ -709,8 +732,8 @@ function showEvidence(orderId, bankLineId) {
   const groupSuffix = isGroup ? ` (${bankLinesFound.length} bank lines)`
     : isBatch ? ` (part of a multi-order batch)` : "";
   const verdictHtml = match
-    ? `<div class="evidence-verdict matched">✅ MATCHED &mdash; ${esc(match.method)}, confidence ${match.confidence}${groupSuffix}</div>`
-    : `<div class="evidence-verdict exception">⛔ ${exceptionsFor.length ? esc(exceptionsFor.map(e => e.type).join(", ")) : "NO RECORD"}</div>`;
+    ? `<div class="evidence-verdict matched">MATCHED &mdash; ${esc(match.method)}, confidence ${match.confidence}${groupSuffix}</div>`
+    : `<div class="evidence-verdict exception">${exceptionsFor.length ? esc(exceptionsFor.map(e => e.type).join(", ")) : "NO RECORD"}</div>`;
 
   const refundsForOrder = order ? findRefundsByPaymentId(order.razorpay_payment_id) : [];
   const refundTotal = refundsForOrder.reduce((sum, r) => sum + r.amount, 0);
@@ -797,6 +820,10 @@ function renderSummary(s) {
   if (typeof s.throughput_records_per_sec === "number") {
     $("c-throughput").textContent = `${s.throughput_records_per_sec} rec/s`;
   } // else: an override response has no timing data -- leave the last real measurement showing
+  if (typeof s.llm_elapsed_seconds === "number") {
+    $("c-ai-response-time").textContent = formatDuration(s.llm_elapsed_seconds);
+    $("ai-response-time-card").style.display = "";
+  }
   $("provider-badge").textContent = "LLM layer: " + s.llm_provider;
 
   if (typeof s.total_amount_at_risk === "number") {

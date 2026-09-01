@@ -23,6 +23,8 @@ def test_run_endpoint_returns_full_stateless_payload():
     for e in body["exceptions"]:
         assert "priority" in e and e["priority"] in ("high", "medium", "low")
         assert "amount" in e
+    assert "llm_elapsed_seconds" in body["summary"]
+    assert 0.0 <= body["summary"]["llm_elapsed_seconds"] <= body["summary"]["elapsed_seconds"]
 
 
 def test_run_endpoint_includes_refunds_and_resolves_them_without_exceptions():
