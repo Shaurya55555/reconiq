@@ -26,6 +26,7 @@ EXPECTED_OUTCOME = {
     "batch_settlement": "matched",
     "refunded": "matched",
     "partial_refund": "matched",
+    "refunded_after_settlement": "matched",
     "missing_settlement": "exception",
     "amount_mismatch": "exception",
 }

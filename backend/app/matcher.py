@@ -34,6 +34,35 @@ def _parse_date(s: str) -> date:
     return datetime.fromisoformat(s).date() if "T" not in s else datetime.fromisoformat(s).date()
 
 
+def _net_refund_for_settlement(order: dict, stl: dict, order_refunds: list[dict]) -> tuple[dict, float, float]:
+    """A refund only shrinks what a settlement is expected to pay out if it
+    happened at or before that settlement -- Razorpay nets a pre-settlement
+    refund out of the payout amount. A refund issued *after* the settlement
+    is a separate, later cash event: the settlement was genuinely
+    legitimate at its full amount, and a later refund must never make it
+    look short. Returns (match_order, pre_settlement_refund, post_settlement_refund).
+    """
+    settled_at = _parse_date(stl["settled_at"])
+    pre = round(sum(r["amount"] for r in order_refunds
+                     if _parse_date(r["refunded_at"]) <= settled_at), 2)
+    post = round(sum(r["amount"] for r in order_refunds
+                      if _parse_date(r["refunded_at"]) > settled_at), 2)
+    if pre == 0:
+        return order, 0.0, post
+    net_amount = round(max(order["amount"] - pre, 0.0), 2)
+    return {"amount": net_amount, "created_at": order["created_at"]}, pre, post
+
+
+def _refund_suffix(pre: float, post: float) -> str:
+    if post > 0:
+        return (f" (settlement is full and legitimate; order was refunded "
+                f"₹{post:,.2f} afterward -- tracked as a separate event, not "
+                f"netted against this settlement)")
+    if pre > 0:
+        return f" (net of ₹{pre:,.2f} pre-settlement refund)"
+    return ""
+
+
 def _find_settlement_match(stl: dict, order: dict, utr_matches: list[dict],
                             fee_tolerance_pct: float, date_drift_ok_days: int) -> tuple | None:
     """Try to resolve one settlement against the bank lines that already
@@ -98,10 +127,9 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
     for o in orders:
         orders_by_payment.setdefault(o["razorpay_payment_id"], []).append(o)
 
-    refund_total_by_payment: dict[str, float] = {}
+    refunds_by_payment: dict[str, list[dict]] = {}
     for r in (refunds or []):
-        refund_total_by_payment[r["payment_id"]] = round(
-            refund_total_by_payment.get(r["payment_id"], 0.0) + r["amount"], 2)
+        refunds_by_payment.setdefault(r["payment_id"], []).append(r)
 
     # A settlement normally covers one payment_id, but a batch settlement
     # (multiple payments consolidated by Razorpay into one settlement,
@@ -184,14 +212,15 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
                 "duplicate payment_id across orders", order_id=extra_order["order_id"])
 
         candidate_settlements = settlements_by_payment.get(payment_id, [])
-        refund_total = refund_total_by_payment.get(payment_id, 0.0)
+        order_refunds = refunds_by_payment.get(payment_id, [])
+        total_refund = round(sum(r["amount"] for r in order_refunds), 2)
 
         if not candidate_settlements:
-            if refund_total >= order["amount"] - 1.0:
+            if total_refund >= order["amount"] - 1.0:
                 # No settlement exists, but a refund fully explains why --
                 # Razorpay never generates a settlement for a fully refunded
                 # payment. This is a correct, resolved outcome, not a gap.
-                note = f"Order fully refunded (₹{refund_total:,.2f}); no settlement expected."
+                note = f"Order fully refunded (₹{total_refund:,.2f}); no settlement expected."
                 matches.append({
                     "order_id": order["order_id"], "settlement_id": None,
                     "bank_line_id": None, "method": "refunded", "confidence": 1.0,
@@ -208,33 +237,31 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
                 "no settlement row for this payment_id", order_id=order["order_id"])
             continue
 
-        # A refund shrinks what settlement amount is *expected* -- match
-        # against order.amount - refund_total, not the raw order amount,
-        # so a genuine partial refund is never misfiled as a fee mismatch
-        # or an unexplained gap.
-        match_order = order if refund_total == 0 else {
-            "amount": max(round(order["amount"] - refund_total, 2), 0.0),
-            "created_at": order["created_at"],
-        }
-        refund_suffix = f" (net of ₹{refund_total:,.2f} partial refund)" if refund_total > 0 else ""
-
+        # Netting is computed per candidate settlement, not once for the
+        # order -- a refund only reduces what a *specific* settlement was
+        # expected to pay out if it predates that settlement (see
+        # _net_refund_for_settlement). A refund issued after a settlement
+        # never shrinks it.
         picked = None
         picked_stl = None
+        picked_pre = picked_post = 0.0
         for stl in candidate_settlements:
             if stl["settlement_id"] in resolved_settlement_ids:
                 continue
             utr_matches = [b for b in unmatched_bank.values() if stl["utr"] in b["narration"]]
             if not utr_matches:
                 continue
+            match_order, pre, post = _net_refund_for_settlement(order, stl, order_refunds)
             result = _find_settlement_match(stl, match_order, utr_matches, fee_tolerance_pct, date_drift_ok_days)
             if result is None:
                 continue
-            picked, picked_stl = result, stl
+            picked, picked_stl, picked_pre, picked_post = result, stl, pre, post
             break
 
         if picked:
             method, confidence, note, bank_line_ids = picked
             stl = picked_stl
+            refund_suffix = _refund_suffix(picked_pre, picked_post)
             matches.append({
                 "order_id": order["order_id"], "settlement_id": stl["settlement_id"],
                 "bank_line_id": bank_line_ids[0], "bank_line_ids": bank_line_ids,
@@ -246,6 +273,8 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
             log("match", "matched", method, confidence, note + refund_suffix, order_id=order["order_id"])
         else:
             stl = candidate_settlements[0]
+            match_order, pre, post = _net_refund_for_settlement(order, stl, order_refunds)
+            refund_suffix = _refund_suffix(pre, post)
             amount_diff_pct = abs(stl["amount"] - match_order["amount"]) / (match_order["amount"] or order["amount"] or 1.0)
             if amount_diff_pct > fee_tolerance_pct:
                 # amount is genuinely off, not fee-sized -> not an LLM question

@@ -736,14 +736,27 @@ function showEvidence(orderId, bankLineId) {
     : `<div class="evidence-verdict exception">${exceptionsFor.length ? esc(exceptionsFor.map(e => e.type).join(", ")) : "NO RECORD"}</div>`;
 
   const refundsForOrder = order ? findRefundsByPaymentId(order.razorpay_payment_id) : [];
-  const refundTotal = refundsForOrder.reduce((sum, r) => sum + r.amount, 0);
+  // A refund only nets against the settlement it predates (or matches the
+  // date of) -- a refund issued after settlement is a separate cash event
+  // and must not be shown as reducing an already-legitimate settlement.
+  // Mirrors matcher.py's _net_refund_for_settlement exactly.
+  const settledDate = settlement ? settlement.settled_at.slice(0, 10) : null;
+  const preRefunds = settledDate ? refundsForOrder.filter(r => r.refunded_at.slice(0, 10) <= settledDate) : refundsForOrder;
+  const postRefunds = settledDate ? refundsForOrder.filter(r => r.refunded_at.slice(0, 10) > settledDate) : [];
+  const preRefundTotal = preRefunds.reduce((sum, r) => sum + r.amount, 0);
+  const postRefundTotal = postRefunds.reduce((sum, r) => sum + r.amount, 0);
 
   const rows = [];
   if (order) rows.push(["Order amount", rupees(order.amount)]);
   if (refundsForOrder.length) {
     rows.push([refundsForOrder.length > 1 ? "Refunds" : "Refund",
       refundsForOrder.map(r => `${rupees(r.amount)} (${esc(r.type)}, ${r.refunded_at.slice(0, 10)})`).join("<br>")]);
-    rows.push(["Net of refund", rupees(Math.max((order?.amount ?? 0) - refundTotal, 0))]);
+    if (preRefundTotal > 0) {
+      rows.push(["Net of pre-settlement refund", rupees(Math.max((order?.amount ?? 0) - preRefundTotal, 0))]);
+    }
+    if (postRefundTotal > 0) {
+      rows.push(["Post-settlement refund", `${rupees(postRefundTotal)} &mdash; separate event, not netted against this settlement`]);
+    }
   }
   if (settlement && isBatch) {
     rows.push(["Settlement amount (batch total)", rupees(settlement.amount)]);

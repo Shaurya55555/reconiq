@@ -656,3 +656,79 @@ def test_heuristic_answer_reports_unknown_order_honestly():
     answer = llm_resolver._heuristic_answer("what about ORD9999?", summary, [], [])
     assert "ORD9999" in answer
     assert "not" in answer.lower()
+
+
+# ---- refund timing: pre- vs post-settlement ----
+
+def test_refund_after_settlement_does_not_shrink_a_legitimate_settlement():
+    """The exact scenario: customer pays 1000, Razorpay settles the full
+    1000, and only afterward does the customer get refunded. The
+    settlement was genuinely legitimate at its full amount and must match
+    normally -- a later refund must never make it look like a mismatch."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
+                  "amount": 1000.0, "settled_at": "2026-08-02"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT",
+                   "amount": 1000.0, "value_date": "2026-08-02"}]
+    refund = {"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 1000.0,
+              "refunded_at": "2026-08-06", "type": "full"}  # 4 days AFTER settled_at
+
+    result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])
+    assert not result["exceptions"]
+    assert len(result["matches"]) == 1
+    match = result["matches"][0]
+    assert match["method"] == "exact"
+    assert "tracked as a separate event" in match["note"]
+    assert "not netted" in match["note"]
+
+
+def test_refund_before_settlement_still_nets_as_before():
+    """Regression guard: a refund genuinely predating its settlement must
+    still net out of the expected amount -- the timing fix must not break
+    the original pre-settlement case."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    refund = {"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 400.0,
+              "refunded_at": "2026-08-01T12:00:00", "type": "partial"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
+                  "amount": 600.0, "settled_at": "2026-08-02"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT",
+                   "amount": 600.0, "value_date": "2026-08-02"}]
+
+    result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])
+    assert not result["exceptions"]
+    assert len(result["matches"]) == 1
+    assert "pre-settlement refund" in result["matches"][0]["note"]
+
+
+def test_refund_exactly_on_settlement_date_counts_as_pre_settlement():
+    """A refund dated the same day as settlement is treated as pre-settlement
+    (<=), matching the intuition that Razorpay had the same-day chance to
+    net it out."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    refund = {"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 400.0,
+              "refunded_at": "2026-08-02", "type": "partial"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
+                  "amount": 600.0, "settled_at": "2026-08-02"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT",
+                   "amount": 600.0, "value_date": "2026-08-02"}]
+
+    result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])
+    assert not result["exceptions"]
+    assert len(result["matches"]) == 1
+
+
+def test_generated_refunded_after_settlement_orders_resolve_as_matched():
+    """End-to-end sanity check on the new synthetic anomaly: a
+    refunded_after_settlement order must resolve as a normal settlement
+    match, never as an amount_mismatch exception."""
+    batch, _, final = run_pipeline(n_orders=250, seed=99)
+    order_ids = {o["order_id"] for o in batch["orders"] if o["_truth"] == "refunded_after_settlement"}
+    assert order_ids, "expected at least one refunded_after_settlement order at this seed"
+    matched_order_ids = {m["order_id"] for m in final["matches"]}
+    assert order_ids <= matched_order_ids
+    for oid in order_ids:
+        match = next(m for m in final["matches"] if m["order_id"] == oid)
+        assert match["method"] in ("exact", "fuzzy")

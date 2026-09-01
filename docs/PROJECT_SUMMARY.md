@@ -45,11 +45,15 @@ gate, and leaves genuine uncertainty as an honest, reason-coded exception.
    bank credit (`batch_settlement`, genuinely how Razorpay's batch
    settlement works). Both fully deterministic — the shared UTR proves
    the group belongs together, not an LLM guess.
-4. **Refund-aware matching** — a full refund resolves with no
-   settlement expected (`method: "refunded"`); a partial refund is
-   matched against `order.amount − refund.amount`, not the raw order
-   amount, so a correctly-processed refund is never misfiled as
-   `amount_mismatch`.
+4. **Refund-aware matching, timing-sensitive** — a full refund resolves
+   with no settlement expected (`method: "refunded"`); a partial refund
+   is matched against `order.amount − refund.amount`, not the raw order
+   amount. Critically, netting only applies to a refund that predates
+   its settlement (`refund.refunded_at <= settlement.settled_at`) — a
+   refund issued *after* settlement is a separate, later cash event and
+   must never make an already-legitimate full settlement look like an
+   `amount_mismatch`. Computed per settlement candidate, not once per
+   order, so this is correct even with multiple candidate settlements.
 5. **LLM-resolved match** — only when the UTR isn't found in *any* bank
    line at all (garbled/truncated narration). A real Gemini call
    reasons over the free text and returns a confidence score; an
@@ -126,24 +130,28 @@ Locked for the pitch video and repeatable by anyone:
 | Metric | Value |
 |---|---:|
 | Match rate | 92% (92/100) |
-| Ground-truth accuracy | **100%** |
-| Value-weighted accuracy | **100%** |
+| Ground-truth accuracy | **98%** |
+| Value-weighted accuracy | **97.7%** |
 | False-clear amount | **₹0** |
-| Safe-miss amount | ₹0 |
-| Amount processed | ₹12,58,860 |
-| Amount reconciled | ₹9,89,232 |
-| Amount at risk | ₹2,69,628 |
-| Amount refunded | ₹1,04,118 |
+| Safe-miss amount | ₹29,916 |
+| Amount processed | ₹12,09,087 |
+| Amount reconciled | ₹9,68,871 |
+| Amount at risk | ₹2,40,216 |
+| Amount refunded | ₹1,81,916 |
 | Rules-only match rate | 90% |
 | Rules+AI match rate | 92% (**+2.0pp AI uplift**, same batch) |
-| Rules-only accuracy | 98% → Rules+AI accuracy: **100%** |
-| Methods represented | exact, fuzzy, `group_split`, `batch_settlement`, `refunded`, `llm` — all six |
-| Closing verdict | **Review before closing** — ₹2,69,628 unresolved, ₹2,58,672 above materiality threshold (₹5,000) |
+| Rules-only accuracy | 96% → Rules+AI accuracy: **98%** |
+| Methods represented | exact, fuzzy, `group_split`, `batch_settlement`, `refunded`, `llm` — all six, plus a `refunded_after_settlement` case (settlement matches at full value, refund tracked separately) |
+| Closing verdict | **Review before closing** — ₹2,40,216 unresolved, ₹2,24,651 above materiality threshold (₹5,000) |
 
 This single batch exercises every matching pass, the refund-aware
-matcher, the AI layer, and the closing verdict — chosen deliberately for
-that diversity, not cherry-picked for a flattering number (accuracy is
-verified, not tuned to this seed — see the multi-seed benchmark below).
+matcher (including the pre- vs. post-settlement refund distinction), the
+AI layer, and the closing verdict — chosen deliberately for that
+diversity, not cherry-picked for a flattering number. The 2% gap from
+perfect accuracy here is an honest **safe miss** (a case flagged for
+review that was actually fine — the conservative failure mode, never a
+false clear) — not tuned away, because the multi-seed benchmark below is
+what actually backs the accuracy claim, not this one batch.
 
 ---
 

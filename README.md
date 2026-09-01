@@ -545,6 +545,24 @@ behaves:
   `order.amount - refund.amount`, not a fee-sized discrepancy. ReconIQ
   matches against that net amount, so a correctly-processed partial
   refund is never misfiled as `amount_mismatch`.
+- **Timing-aware netting — pre- vs. post-settlement refunds.** A refund
+  only reduces what a settlement was expected to pay out if the refund
+  happened *at or before* that settlement (`refund.refunded_at <=
+  settlement.settled_at`) — Razorpay nets a pre-settlement refund out of
+  the payout. A refund issued *after* the settlement is a separate,
+  later cash event: the settlement was genuinely legitimate at its full
+  amount, and a later refund must never make it look like a mismatch.
+  `matcher._net_refund_for_settlement` computes this per settlement
+  candidate (not once per order), and the match note says explicitly
+  which case applied — e.g. *"settlement is full and legitimate; order
+  was refunded ₹X afterward — tracked as a separate event, not netted
+  against this settlement."* The evidence drawer shows the same
+  distinction (a "Post-settlement refund" row, separate from "Net of
+  pre-settlement refund"). Deliberately *not* full double-entry
+  bookkeeping: the post-settlement refund is reported and explicitly
+  called out, not matched against its own outbound bank debit line —
+  there's no bank-line data for outbound refund transactions in the
+  current schema, so that's the honest limit of what's built here.
 - A refund only ever explains the gap it actually accounts for —
   `test_refund_does_not_mask_a_genuine_amount_mismatch` locks in that a
   refund can't paper over an unrelated, genuine discrepancy.

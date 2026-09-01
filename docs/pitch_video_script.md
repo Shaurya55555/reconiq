@@ -50,20 +50,21 @@ Controller**. Let it load on screen, don't cut away.
 
 > "This is a live batch — 100 transactions, mixing clean payments, fee
 > adjustments, split settlements, batch settlements, full and partial
-> refunds, and garbled bank narrations."
+> refunds, refunds that happen *after* settlement, and garbled bank
+> narrations."
 
 Point at the financial position cards as they render:
 
-> "₹12.6 lakh processed. ₹9.9 lakh reconciled. ₹2.7 lakh needs attention.
-> ₹1 lakh was legitimately refunded — tracked separately, never counted
+> "₹12.1 lakh processed. ₹9.7 lakh reconciled. ₹2.4 lakh needs attention.
+> ₹1.8 lakh was legitimately refunded — tracked separately, never counted
 > as reconciled money it isn't."
 
 Point at the verdict banner:
 
-> "And the headline call: **Review before closing.** ₹2.7 lakh remains
-> unresolved, ₹2.6 lakh of that above the materiality threshold. A
-> finance controller doesn't need to read twenty exception rows to know
-> the books aren't ready to close today — this tells them directly."
+> "And the headline call: **Review before closing.** ₹2.4 lakh remains
+> unresolved, most of that above the materiality threshold. A finance
+> controller doesn't need to read twenty exception rows to know the
+> books aren't ready to close today — this tells them directly."
 
 This is the moment that establishes it as a *finance controller*, not
 just a matcher.
@@ -89,6 +90,18 @@ or `amount_mismatch`).
 This is probably the single strongest product interaction — don't rush
 it, but don't overstay either (aim for well under a minute).
 
+**Optional swap, if time allows:** click **Why?** on a match whose note
+mentions "not netted" (a `refunded_after_settlement` order) instead of
+the exception example. It's a sharper story: *"This order was fully
+settled — real, legitimate money in — and only days later did the
+customer get refunded. ReconIQ knows the difference between a refund
+that happened before settlement, which genuinely reduces what's owed,
+and one that happened after, which doesn't undo a settlement that
+already happened correctly. Most reconciliation tools would either
+ignore this or flag it as a false mismatch."* This is a real accounting
+distinction, not an AI flex — worth using if the exception example
+feels repetitive with beat 3:40.
+
 ## 3:00–3:40 — Prove AI isn't decorative
 
 Scroll to the Rules-only vs. Rules+AI comparison.
@@ -99,9 +112,9 @@ Scroll to the Rules-only vs. Rules+AI comparison.
 
 Read the real numbers on screen:
 
-> "90% match rate and 98% accuracy with rules only. 92% match rate and
-> **100% accuracy** with the AI layer added — a two-point uplift, on the
-> same 100 transactions, measured every single run."
+> "90% match rate and 96% accuracy with rules only. 92% match rate and
+> **98% accuracy** with the AI layer added — a two-point uplift on both,
+> on the same 100 transactions, measured every single run."
 
 ## 3:40–4:20 — Prove it's not cherry-picked
 

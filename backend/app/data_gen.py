@@ -27,10 +27,11 @@ Anomaly = Literal[
     "clean", "fee_adjusted", "date_shifted", "missing_settlement",
     "duplicate_settlement", "garbled_narration", "amount_mismatch",
     "split_settlement", "batch_settlement", "refunded", "partial_refund",
+    "refunded_after_settlement",
 ]
 
 ANOMALY_WEIGHTS = {
-    "clean": 0.34,
+    "clean": 0.30,
     "fee_adjusted": 0.10,
     "date_shifted": 0.06,
     "missing_settlement": 0.06,
@@ -41,6 +42,7 @@ ANOMALY_WEIGHTS = {
     "batch_settlement": 0.10,
     "refunded": 0.05,
     "partial_refund": 0.05,
+    "refunded_after_settlement": 0.04,
 }
 
 
@@ -139,19 +141,39 @@ def generate_batch(n_orders: int = 70, seed: int | None = None,
         net_amount = amount
 
         if anomaly == "partial_refund":
-            # Partially refunded -- Razorpay nets the refund out of the
-            # settlement, so the settlement/bank amount below is genuinely
-            # order.amount - refund.amount, not a fee-sized discrepancy.
-            # Real money, real settlement, just smaller than the order.
+            # Partially refunded *before* settlement -- Razorpay nets the
+            # refund out of the payout, so the settlement/bank amount below
+            # is genuinely order.amount - refund.amount, not a fee-sized
+            # discrepancy. Real money, real settlement, just smaller than
+            # the order. The refund must be dated at or before settled_at
+            # (bounded to the [0, settled_at - created_at] window) -- this
+            # anomaly specifically models the pre-settlement netting case;
+            # see refunded_after_settlement below for the other case.
             refund_amount = round(amount * rng.uniform(0.1, 0.6), 2)
+            max_offset_days = (settled_at - created_at).days
             refunds.append({
                 "refund_id": f"rfnd_{rng.randint(10**9, 10**10 - 1)}",
                 "payment_id": payment_id,
                 "amount": refund_amount,
-                "refunded_at": (created_at + timedelta(days=rng.randint(0, 3))).isoformat(),
+                "refunded_at": (created_at + timedelta(days=rng.randint(0, max_offset_days))).isoformat(),
                 "type": "partial",
             })
             net_amount = round(amount - refund_amount, 2)
+
+        if anomaly == "refunded_after_settlement":
+            # The settlement already happened and was genuinely legitimate
+            # at the *full* order amount -- the refund is a separate, later
+            # cash event (customer asks for a refund days after the money
+            # already settled) and must never be netted against this
+            # settlement. net_amount stays at the full `amount`; only the
+            # refund record itself is dated after settled_at.
+            refunds.append({
+                "refund_id": f"rfnd_{rng.randint(10**9, 10**10 - 1)}",
+                "payment_id": payment_id,
+                "amount": amount,
+                "refunded_at": (settled_at + timedelta(days=rng.randint(1, 5))).isoformat(),
+                "type": "full",
+            })
 
         if anomaly == "fee_adjusted":
             fee_pct = rng.uniform(0.015, 0.028)
