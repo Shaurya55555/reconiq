@@ -335,7 +335,7 @@ flowchart TD
     N --> D1[Pass 1: Exact match]
     D1 --> D2[Pass 2: Fuzzy match - fee / date drift]
     D2 --> D3[Pass 3: Group match - 1:N and N:1]
-    D3 --> D4[Pass 4: Refund-aware match]
+    D3 --> D4[Pass 4: Refund-aware match - pre vs post settlement]
     D4 -->|still unresolved| LLM[Gemini LLM resolver]
     LLM --> GATE{Confidence >= threshold?}
     GATE -->|yes| MATCH[MATCH - evidence recorded]

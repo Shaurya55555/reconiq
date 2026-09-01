@@ -206,12 +206,15 @@ empirical basis for the default, not an assertion.
 
 ## Proof it works
 
-- **57/57 automated tests passing**, including dedicated adversarial
+- **65/65 automated tests passing**, including dedicated adversarial
   tests: group-split/batch-settlement matching never falsely combines
   unrelated bank lines or rescues a genuine amount mismatch; a refund
   only ever explains the gap it actually accounts for and never masks
-  an unrelated discrepancy; a stricter confidence threshold never
-  auto-accepts *more* LLM matches than a looser one.
+  an unrelated discrepancy; a refund issued *after* settlement never
+  shrinks an already-legitimate settlement, while one issued *before*
+  still nets correctly (both directions locked in, not just the happy
+  path); a stricter confidence threshold never auto-accepts *more* LLM
+  matches than a looser one.
 - **CI green** on every commit (GitHub Actions).
 - **Verified live in a browser**: real clicks (not just API calls) —
   running a reconciliation, opening the evidence drawer, performing a
