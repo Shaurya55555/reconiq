@@ -127,6 +127,21 @@
   .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
   .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 700px) { .charts { grid-template-columns: 1fr; } }
+  @media (max-width: 560px) {
+    .policy-options { grid-template-columns: 1fr; }
+    header p { display: none; }
+  }
+
+  #site-footer { border-top: 1px solid var(--border-soft); margin-top: 8px; }
+  #site-footer .footer-inner {
+    max-width: 1080px; margin: 0 auto; padding: 24px 32px 32px;
+    color: var(--muted2); font-size: 12px; line-height: 1.6;
+  }
+  #site-footer strong { color: var(--muted); }
+  #site-footer .footer-links { margin-top: 10px; }
+  #site-footer a { color: var(--muted2); text-decoration: underline; text-underline-offset: 2px; }
+  #site-footer a:hover { color: var(--accent); }
+  #site-footer .footer-sep { margin: 0 8px; }
   .chart-box { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
   .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12px; }
   .bar-label { width: 130px; color: var(--muted); flex-shrink: 0; }
@@ -447,7 +462,7 @@
   </div><!-- /#results -->
 
   <section id="benchmark-section" class="validation-section">
-    <div class="validation-eyebrow">Validation &amp; robustness</div>
+    <div class="validation-eyebrow">Validation &amp; robustness &mdash; 1. Stress test</div>
     <h2>Accuracy across corruption levels</h2>
     <p style="color:var(--muted); font-size:12px; margin-top:10px">
       Runs fresh batches at increasing corruption rates (not the same batch shown above), several
@@ -467,7 +482,7 @@
   </section>
 
   <section id="calibration-section" class="validation-section">
-    <div class="validation-eyebrow">Validation &amp; robustness</div>
+    <div class="validation-eyebrow">Validation &amp; robustness &mdash; 2. Calibration</div>
     <h2>Confidence threshold calibration</h2>
     <p style="color:var(--muted); font-size:12px; margin-top:10px">
       The AI confidence threshold (default 0.6) is a starting point, not an empirically justified
@@ -486,6 +501,21 @@
     <p id="calibration-recommendation" style="color:var(--muted); font-size:12px; margin-top:10px"></p>
   </section>
 </main>
+
+<footer id="site-footer">
+  <div class="footer-inner">
+    <div>
+      <strong>ReconIQ</strong> &mdash; a reconciliation agent built for the Razorpay AI Buildathon
+      (Track 04: AI Finance Controller). Deterministic matching first, an LLM only for what rules
+      genuinely can't resolve, honest exceptions for the rest.
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/Shaurya55555/reconiq" target="_blank" rel="noopener">GitHub repo</a>
+      <span class="footer-sep">&middot;</span>
+      <span>Python / FastAPI &middot; Gemini &middot; vanilla JS, no build step</span>
+    </div>
+  </div>
+</footer>
 
 <div id="evidence-overlay">
   <div id="evidence-drawer">
