@@ -58,7 +58,7 @@
 
   main { max-width: 1080px; margin: 0 auto; padding: 0 32px 48px; }
   #verdict-banner, #exceptions-section, #matches-section, #charts-section,
-  #audit-section, #chat-section, #benchmark-section, #calibration-section {
+  #audit-section, #benchmark-section, #calibration-section {
     scroll-margin-top: 108px;
   }
   button {
@@ -236,6 +236,33 @@
   }
   #evidence-drawer h3 { margin: 0 0 4px; font-size: 16px; }
   #evidence-drawer .close-btn { position: absolute; top: 20px; right: 20px; padding: 4px 10px; font-size: 13px; }
+
+  /* Chat: floating trigger + non-modal right-side panel (doesn't block the
+     rest of the dashboard while open, unlike the evidence drawer) */
+  #chat-fab {
+    display: none; position: fixed; bottom: 24px; right: 24px; z-index: 90;
+    align-items: center; gap: 8px; padding: 13px 20px; border-radius: 999px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+  }
+  #chat-fab.visible { display: flex; }
+  #chat-panel {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(380px, 92vw);
+    background: var(--panel); border-left: 1px solid var(--border); z-index: 91;
+    box-shadow: -8px 0 24px rgba(0,0,0,0.3);
+    display: flex; flex-direction: column;
+    transform: translateX(100%); transition: transform 0.2s ease;
+  }
+  #chat-panel.open { transform: translateX(0); }
+  #chat-panel-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 18px 20px; border-bottom: 1px solid var(--border-soft); flex-shrink: 0;
+  }
+  #chat-panel-header h3 { margin: 0; font-size: 15px; }
+  #chat-panel-close { padding: 4px 10px; font-size: 13px; }
+  #chat-panel-body { padding: 16px 20px; overflow-y: auto; flex: 1; }
+  #chat-panel-footer { padding: 14px 20px; border-top: 1px solid var(--border-soft); flex-shrink: 0; }
+  #chat-panel-footer .row { margin-bottom: 0; flex-wrap: nowrap; }
+  #chat-panel-footer input { flex: 1; min-width: 0; }
   .evidence-verdict { font-size: 15px; font-weight: 700; padding: 10px 14px; border-radius: 8px; margin: 14px 0; }
   .evidence-verdict.matched { background: #123a35; color: var(--good); }
   .evidence-verdict.exception { background: #3a1414; color: var(--bad); }
@@ -450,15 +477,6 @@
     <div id="audit-table"></div>
   </section>
 
-  <section id="chat-section" style="display:none">
-    <h2>Ask about this run</h2>
-    <div id="chat-log"></div>
-    <div class="row" style="margin-bottom:0">
-      <input id="chat-input" type="text" placeholder="e.g. how many exceptions and why?" style="flex:1; min-width:280px">
-      <button id="chat-btn">Ask</button>
-    </div>
-  </section>
-
   </div><!-- /#results -->
 
   <section id="benchmark-section" class="validation-section">
@@ -522,6 +540,28 @@
     <button class="secondary close-btn" id="evidence-close-btn">Close</button>
     <h3 id="evidence-title">Evidence</h3>
     <div id="evidence-body"></div>
+  </div>
+</div>
+
+<button id="chat-fab" title="Ask about this run">
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+    <path d="M4 5.5h16v11H9l-4 3.5v-3.5H4v-11z" stroke-linejoin="round"/>
+  </svg>
+  Ask
+</button>
+<div id="chat-panel">
+  <div id="chat-panel-header">
+    <h3>Ask about this run</h3>
+    <button class="secondary" id="chat-panel-close">Close</button>
+  </div>
+  <div id="chat-panel-body">
+    <div id="chat-log"></div>
+  </div>
+  <div id="chat-panel-footer">
+    <div class="row">
+      <input id="chat-input" type="text" placeholder="e.g. how many exceptions and why?">
+      <button id="chat-btn">Ask</button>
+    </div>
   </div>
 </div>
 
@@ -673,12 +713,13 @@ function renderAll(scrollTo = true) {
   renderMisclassified(currentRun.ground_truth);
   renderRulesOnlyComparison(currentRun.rules_only_summary, currentRun.summary);
 
-  const sections = ["cards", "charts-section", "exceptions-section", "matches-section", "audit-section", "chat-section"];
+  const sections = ["cards", "charts-section", "exceptions-section", "matches-section", "audit-section"];
   if (currentRun.ground_truth && currentRun.ground_truth.misclassified.length) sections.push("misclassified-section");
   if (currentRun.rules_only_summary) sections.push("rules-only-section");
   sections.forEach((id) => $(id).style.display = "");
 
   $("dash-nav").classList.add("visible");
+  $("chat-fab").classList.add("visible");
   initScrollSpy();
 
   if (scrollTo) $("results").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -916,6 +957,17 @@ function hideEvidence() {
   $("evidence-overlay").style.display = "none";
 }
 
+function openChatPanel() {
+  $("chat-panel").classList.add("open");
+  $("chat-input").focus();
+}
+function closeChatPanel() {
+  $("chat-panel").classList.remove("open");
+}
+function toggleChatPanel() {
+  $("chat-panel").classList.contains("open") ? closeChatPanel() : openChatPanel();
+}
+
 function renderSummary(s) {
   if (typeof s.ground_truth_accuracy === "number") {
     $("c-accuracy").textContent = pct(s.ground_truth_accuracy);
@@ -1149,6 +1201,13 @@ $("exceptions-table").addEventListener("click", (e) => {
 
 $("evidence-close-btn").addEventListener("click", hideEvidence);
 $("evidence-overlay").addEventListener("click", (e) => { if (e.target.id === "evidence-overlay") hideEvidence(); });
+$("chat-fab").addEventListener("click", toggleChatPanel);
+$("chat-panel-close").addEventListener("click", closeChatPanel);
+document.querySelector('#dash-nav a[href="#chat-section"]').addEventListener("click", (e) => {
+  e.preventDefault();
+  openChatPanel();
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeChatPanel(); });
 
 function lineChart(containerId, series, { width = 640, height = 220, yMin = 0, yMax = 1 } = {}) {
   const pad = { l: 44, r: 16, t: 16, b: 28 };
