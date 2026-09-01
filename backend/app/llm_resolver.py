@@ -135,13 +135,51 @@ _PROVIDERS = {
 
 
 QA_SYSTEM_PROMPT = """You are a reconciliation analyst answering a question about one \
-completed reconciliation run. You are given the run's summary metrics and its exception \
-list (records that could not be auto-matched). Answer only from this data, in 2-4 \
+completed reconciliation run. You are given the run's summary metrics, its exception \
+list (records that could not be auto-matched), and -- if the question named a specific \
+order -- that order's own match or exception record. Answer only from this data, in 2-4 \
 sentences. If the question asks for something not present in the data, say so explicitly \
 rather than guessing."""
 
+_ORDER_ID_RE = re.compile(r"\bORD[A-Za-z0-9_-]*\d[A-Za-z0-9_-]*\b", re.IGNORECASE)
 
-def _heuristic_answer(question: str, summary: dict, exceptions: list[dict]) -> str:
+
+def _find_order_record(question: str, exceptions: list[dict], matches: list[dict]) -> dict | None:
+    """A question naming a specific order (e.g. "ORD1053") needs that
+    order's own record, not just the aggregate summary/exception list --
+    the exception list alone only covers orders that DIDN'T match, so a
+    question about a matched order would otherwise look like the data is
+    simply missing. Only the order's exact record is looked up (not a
+    bulk dump of every match), so this stays cheap regardless of batch
+    size.
+    """
+    m = _ORDER_ID_RE.search(question)
+    if not m:
+        return None
+    order_id = m.group(0).upper()
+    for e in exceptions:
+        if str(e.get("order_id", "")).upper() == order_id:
+            return {"order_id": order_id, "status": "exception", "record": e}
+    for match in matches:
+        if str(match.get("order_id", "")).upper() == order_id:
+            return {"order_id": order_id, "status": "matched", "record": match}
+    return {"order_id": order_id, "status": "not_found", "record": None}
+
+
+def _heuristic_answer(question: str, summary: dict, exceptions: list[dict],
+                       matches: list[dict] | None = None) -> str:
+    matches = matches or []
+    found = _find_order_record(question, exceptions, matches)
+    if found:
+        oid, status, record = found["order_id"], found["status"], found["record"]
+        if status == "matched":
+            return (f"{oid} matched via method '{record.get('method')}' "
+                     f"(confidence {record.get('confidence')}): {record.get('note', '')}")
+        if status == "exception":
+            return f"{oid} is an exception ({record.get('type')}): {record.get('reason', '')}"
+        return (f"{oid} isn't in this run's {summary['total_orders']}-order batch -- "
+                "it's not among the matches or the exceptions.")
+
     q = question.lower()
     by_type: dict[str, int] = {}
     for e in exceptions:
@@ -167,13 +205,18 @@ def _heuristic_answer(question: str, summary: dict, exceptions: list[dict]) -> s
             f"run's match rate was {summary['match_rate']:.1%} with no open exceptions.")
 
 
-def answer_question(question: str, summary: dict, exceptions: list[dict]) -> str:
+def answer_question(question: str, summary: dict, exceptions: list[dict],
+                     matches: list[dict] | None = None) -> str:
+    matches = matches or []
     provider = os.getenv("LLM_PROVIDER", "").lower()
     if provider not in _PROVIDERS:
-        return _heuristic_answer(question, summary, exceptions)
+        return _heuristic_answer(question, summary, exceptions, matches)
 
+    found = _find_order_record(question, exceptions, matches)
+    order_context = f"\nNamed order lookup: {json.dumps(found)}" if found else ""
     context = (f"Summary: {json.dumps(summary)}\n"
-               f"Exceptions ({len(exceptions)}): {json.dumps(exceptions[:50])}\n"
+               f"Exceptions ({len(exceptions)}): {json.dumps(exceptions[:50])}"
+               f"{order_context}\n"
                f"Question: {question}")
     try:
         if provider == "openai":
@@ -214,8 +257,8 @@ def answer_question(question: str, summary: dict, exceptions: list[dict]) -> str
             resp.raise_for_status()
             return resp.json()["response"]
     except Exception as exc:
-        return f"[{provider} call failed: {exc}] " + _heuristic_answer(question, summary, exceptions)
-    return _heuristic_answer(question, summary, exceptions)
+        return f"[{provider} call failed: {exc}] " + _heuristic_answer(question, summary, exceptions, matches)
+    return _heuristic_answer(question, summary, exceptions, matches)
 
 
 def resolve(case: dict, candidates: list[dict]) -> dict:

@@ -628,3 +628,31 @@ def test_stricter_confidence_threshold_never_accepts_more_llm_matches():
     strict_llm_matches = sum(1 for m in strict["matches"] if m["method"] == "llm")
     lenient_llm_matches = sum(1 for m in lenient["matches"] if m["method"] == "llm")
     assert strict_llm_matches <= lenient_llm_matches
+
+
+# ---- "Ask about this run" -- order lookup must cover matched orders too ----
+
+def test_heuristic_answer_finds_a_matched_order_by_id():
+    """The exception list alone only covers orders that DIDN'T match -- a
+    question naming a matched order must still be answerable, not
+    misreported as "not in the data" just because it wasn't an exception."""
+    summary = {"matched": 1, "total_orders": 1, "match_rate": 1.0, "exception_count": 0}
+    matches = [{"order_id": "ORD1053", "method": "exact", "confidence": 1.0,
+                "note": "UTR + amount matched exactly"}]
+    answer = llm_resolver._heuristic_answer("what happened to ORD1053?", summary, [], matches)
+    assert "ORD1053" in answer
+    assert "exact" in answer
+
+
+def test_heuristic_answer_finds_an_exception_order_by_id():
+    summary = {"matched": 0, "total_orders": 1, "match_rate": 0.0, "exception_count": 1}
+    exceptions = [{"order_id": "ORD1099", "type": "amount_mismatch", "reason": "off by 20%"}]
+    answer = llm_resolver._heuristic_answer("why did ORD1099 fail?", summary, exceptions, [])
+    assert "ORD1099" in answer and "amount_mismatch" in answer
+
+
+def test_heuristic_answer_reports_unknown_order_honestly():
+    summary = {"matched": 1, "total_orders": 1, "match_rate": 1.0, "exception_count": 0}
+    answer = llm_resolver._heuristic_answer("what about ORD9999?", summary, [], [])
+    assert "ORD9999" in answer
+    assert "not" in answer.lower()

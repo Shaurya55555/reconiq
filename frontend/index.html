@@ -964,7 +964,7 @@ async function askQuestion() {
   $("chat-input").value = "";
   const res = await fetch(`${API}/api/ask`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question: q, summary: currentRun.summary, exceptions: currentRun.exceptions }),
+    body: JSON.stringify({ question: q, summary: currentRun.summary, exceptions: currentRun.exceptions, matches: currentRun.matches }),
   });
   const data = await res.json();
   $("chat-log").innerHTML += `<div class="msg a"><b>ReconIQ:</b> ${esc(data.answer)}</div>`;

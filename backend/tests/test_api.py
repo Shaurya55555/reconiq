@@ -169,3 +169,19 @@ def test_override_endpoint_returns_400_for_unknown_action():
         "audit_trail": run["audit_trail"], "action": "delete_everything", "order_id": "ORD1001",
     })
     assert res.status_code == 400
+
+
+def test_ask_endpoint_can_answer_about_a_matched_order_not_just_exceptions():
+    """Regression test: /api/ask used to only receive summary + exceptions,
+    so a question about any matched order looked like missing data even
+    though the order was right there in the run. matches must be threaded
+    through end to end."""
+    run = client.post("/api/run", json={"n_orders": 30, "seed": 6}).json()
+    matched_order_id = run["matches"][0]["order_id"]
+
+    res = client.post("/api/ask", json={
+        "question": f"what happened to {matched_order_id}?",
+        "summary": run["summary"], "exceptions": run["exceptions"], "matches": run["matches"],
+    })
+    assert res.status_code == 200
+    assert matched_order_id in res.json()["answer"]
