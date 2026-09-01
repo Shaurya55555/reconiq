@@ -17,17 +17,50 @@
     --radius: 9px;
   }
   * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font-family: var(--sans); line-height: 1.5;
     background-image: radial-gradient(ellipse 900px 480px at 50% -10%, rgba(123,111,240,0.07), transparent);
   }
-  header { padding: 20px 32px; border-bottom: 1px solid var(--border-soft); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+  header {
+    padding: 16px 32px; border-bottom: 1px solid var(--border-soft); display: flex;
+    justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
+    position: sticky; top: 0; z-index: 40; background: rgba(13,12,10,0.88);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
   header .brand { display: flex; align-items: center; gap: 10px; }
   header .brand-mark { flex-shrink: 0; }
   header h1 { margin: 0; font-family: var(--mono); font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
   header p { margin: 1px 0 0; color: var(--muted2); font-size: 12px; }
+
+  /* Dashboard section nav -- sticks under the header once a run exists,
+     so a long report reads as a navigable dashboard instead of one
+     endless scroll. */
+  #dash-nav {
+    display: none; position: sticky; top: 57px; z-index: 30;
+    background: rgba(13,12,10,0.94); border-bottom: 1px solid var(--border-soft);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
+  #dash-nav.visible { display: block; }
+  #dash-nav .dash-nav-inner {
+    max-width: 1080px; margin: 0 auto; padding: 0 32px; display: flex;
+    gap: 4px; overflow-x: auto; scrollbar-width: none;
+  }
+  #dash-nav .dash-nav-inner::-webkit-scrollbar { display: none; }
+  #dash-nav a {
+    flex-shrink: 0; font-family: var(--mono); font-size: 12px; color: var(--muted);
+    text-decoration: none; padding: 11px 12px; border-bottom: 2px solid transparent;
+    white-space: nowrap; transition: color 0.15s ease, border-color 0.15s ease;
+  }
+  #dash-nav a:hover { color: var(--text); }
+  #dash-nav a.active { color: var(--accent); border-bottom-color: var(--accent-ink); }
+
   main { max-width: 1080px; margin: 0 auto; padding: 0 32px 48px; }
+  #verdict-banner, #exceptions-section, #matches-section, #charts-section,
+  #audit-section, #chat-section, #benchmark-section, #calibration-section {
+    scroll-margin-top: 108px;
+  }
   button {
     background: var(--accent-ink); color: #f5f3ff; border: none; padding: 12px 22px; border-radius: 7px;
     font-family: var(--mono); font-weight: 600; font-size: 13px; letter-spacing: 0.01em; cursor: pointer;
@@ -212,6 +245,17 @@
   </div>
   <div id="provider-badge" style="color: var(--muted); font-size: 12px;"></div>
 </header>
+<nav id="dash-nav">
+  <div class="dash-nav-inner">
+    <a href="#verdict-banner" data-nav>Overview</a>
+    <a href="#exceptions-section" data-nav>Exceptions</a>
+    <a href="#matches-section" data-nav>Matches</a>
+    <a href="#charts-section" data-nav>Charts</a>
+    <a href="#audit-section" data-nav>Audit trail</a>
+    <a href="#chat-section" data-nav>Ask</a>
+    <a href="#benchmark-section" data-nav>Robustness</a>
+  </div>
+</nav>
 <main>
   <section class="hero">
     <h2 class="hero-title">Verify every <span class="accent-word">rupee</span>.<br>Escalate what can't be proven.</h2>
@@ -604,7 +648,33 @@ function renderAll(scrollTo = true) {
   if (currentRun.rules_only_summary) sections.push("rules-only-section");
   sections.forEach((id) => $(id).style.display = "");
 
+  $("dash-nav").classList.add("visible");
+  initScrollSpy();
+
   if (scrollTo) $("results").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+let scrollSpyObserver = null;
+function initScrollSpy() {
+  if (scrollSpyObserver) scrollSpyObserver.disconnect();
+  const navLinks = [...document.querySelectorAll("#dash-nav a[data-nav]")];
+  const targets = navLinks
+    .map(a => ({ link: a, el: document.querySelector(a.getAttribute("href")) }))
+    .filter(t => t.el);
+  if (!targets.length) return;
+
+  scrollSpyObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      const target = targets.find(t => t.el === entry.target);
+      if (!target) return;
+      if (entry.isIntersecting) {
+        navLinks.forEach(a => a.classList.remove("active"));
+        target.link.classList.add("active");
+      }
+    });
+  }, { rootMargin: "-110px 0px -70% 0px", threshold: 0 });
+
+  targets.forEach(t => scrollSpyObserver.observe(t.el));
 }
 
 function renderRulesOnlyComparison(rulesOnly, withAi) {
