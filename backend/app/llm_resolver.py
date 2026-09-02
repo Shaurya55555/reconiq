@@ -70,12 +70,18 @@ def heuristic_resolve(case: dict, candidates: list[dict]) -> dict:
     }
 
 
-# Hard per-call ceiling so one slow provider response can't by itself eat
-# the whole serverless function budget (Vercel's default is 10s and this
-# repo doesn't override it -- see vercel.json). resolve_llm_verdicts() in
-# matcher.py layers a second, wall-clock budget on top of this across the
-# whole batch of deferred cases.
-PROVIDER_CALL_TIMEOUT_SECONDS = 4.0
+# Hard per-call ceiling so one slow provider response can't by itself hang
+# a worker thread forever. 10s, not something tighter, because the Gemini
+# SDK actually rejects a shorter deadline outright (400 INVALID_ARGUMENT:
+# "Manually set deadline Xs is too short. Minimum allowed deadline is
+# 10s.") -- a lower value here doesn't make calls faster, it makes every
+# real Gemini call fail instantly and silently fall back to the offline
+# heuristic, which is worse than not having a per-call timeout at all.
+# This does NOT bound the response the caller actually waits for: that's
+# matcher.LLM_BATCH_TIME_BUDGET_SECONDS, enforced across the whole batch
+# in resolve_llm_verdicts() with a non-blocking pool shutdown, independent
+# of how long any individual call is allowed to keep running here.
+PROVIDER_CALL_TIMEOUT_SECONDS = 10.0
 
 
 def _call_openai(case, candidates) -> dict | None:

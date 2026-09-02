@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -672,28 +673,60 @@ def test_resolve_llm_verdicts_degrades_to_heuristic_once_time_budget_is_spent():
     """A batch with many rule-deferred cases must never let per-call network
     latency add up past the serverless function's own timeout: once the
     wall-clock budget for the whole LLM pass is spent, remaining cases fall
-    back to the offline heuristic instead of making another provider call.
-    Regression guard for the Vercel 504 risk on large batches."""
+    back to the offline heuristic instead of waiting any longer on the
+    provider. Regression guard for the Vercel 504 risk on large batches.
+
+    Cases are now dispatched to a bounded thread pool concurrently (see
+    resolve_llm_verdicts), so a slow resolver *is* still invoked in the
+    background even once the budget is spent -- what the budget actually
+    controls is how long the caller waits for a result, not whether the
+    call was ever attempted. This locks in the wait behavior, not a
+    "never called" guarantee that concurrency makes impossible."""
     batch = data_gen.generate_batch(n_orders=200, seed=3)
     rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
                                      refunds=batch["refunds"])
     assert len(rule_result["needs_llm"]) >= 2, "need at least 2 deferred cases for this test to mean anything"
 
-    calls = []
-
     def fake_slow_resolver(case, candidates):
-        calls.append(case["order_id"])
+        time.sleep(0.3)  # long enough that a 0s budget can never catch it
         return {"bank_line_id": None, "confidence": 0.0, "reasoning": "fake provider call"}
 
     case_verdicts = matcher.resolve_llm_verdicts(rule_result, fake_slow_resolver, time_budget_seconds=0.0)
 
-    # budget is already spent before the first case, so the fake network
-    # resolver must never be called at all
-    assert calls == []
+    # the budget is already spent before any result can arrive, so every
+    # case must fall back to the heuristic instead of waiting for the
+    # (still-running-in-the-background) fake resolver
     assert len(case_verdicts) == len(rule_result["needs_llm"])
     for case, verdict in case_verdicts:
         assert verdict is not None
         assert "time budget exhausted" in verdict["reasoning"]
+
+
+def test_resolve_llm_verdicts_runs_deferred_cases_concurrently_not_sequentially():
+    """The whole point of dispatching to a thread pool instead of a
+    sequential loop: six deferred cases each taking 0.2s must finish in
+    well under 6 * 0.2s = 1.2s wall-clock, proving they actually ran
+    concurrently (bounded by LLM_MAX_CONCURRENCY=5 workers) rather than
+    one after another."""
+    rule_result = {
+        "needs_llm": [{"order_id": f"ORD{i}", "settlement_id": f"stl{i}",
+                        "expected_utr": f"UTR{i}", "expected_amount": 100.0, "customer": "Test"}
+                       for i in range(6)],
+        "unmatched_bank_lines": [],
+    }
+
+    def fake_resolver(case, candidates):
+        time.sleep(0.2)
+        return {"bank_line_id": None, "confidence": 0.9, "reasoning": "fake resolved"}
+
+    start = time.monotonic()
+    case_verdicts = matcher.resolve_llm_verdicts(rule_result, fake_resolver, time_budget_seconds=5.0)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.9, f"expected concurrent execution well under 1.2s, took {elapsed:.2f}s"
+    assert len(case_verdicts) == 6
+    for case, verdict in case_verdicts:
+        assert verdict["reasoning"] == "fake resolved"
 
 
 # ---- "Ask about this run" -- order lookup must cover matched orders too ----

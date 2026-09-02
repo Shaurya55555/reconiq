@@ -383,6 +383,8 @@ DEFAULT_LLM_CONFIDENCE_THRESHOLD = 0.6
 
 
 LLM_BATCH_TIME_BUDGET_SECONDS = 6.0
+LLM_MAX_CONCURRENCY = 5  # bounded, so a large batch can't open dozens of concurrent
+                         # connections to the LLM provider at once
 
 
 def resolve_llm_verdicts(rule_result: dict, llm_resolve_fn,
@@ -397,35 +399,57 @@ def resolve_llm_verdicts(rule_result: dict, llm_resolve_fn,
 
     Each provider call already carries its own short timeout (see
     llm_resolver.PROVIDER_CALL_TIMEOUT_SECONDS), but a batch with many
-    deferred cases could still add those up past the serverless function's
-    own time limit. This tracks wall-clock time across the whole batch and,
-    once the budget is spent, stops calling the network provider for the
-    remaining cases and resolves them with the same offline heuristic a
-    single provider failure already falls back to -- so a large batch
-    degrades to a weaker (but still real, still explained) resolution
-    strategy instead of risking a 504 on the whole request.
+    deferred cases run one at a time would still add those up past the
+    serverless function's own time limit. So this dispatches every
+    deferred case to a bounded thread pool (LLM_MAX_CONCURRENCY workers --
+    these are blocking network calls, not CPU-bound work, so plain
+    threads parallelize them fine without an async rewrite of the FastAPI
+    routes above this) and waits up to time_budget_seconds total for the
+    whole batch, not per case. Whatever hasn't finished when the budget
+    runs out resolves with the same offline heuristic a single provider
+    failure already falls back to -- so a large batch degrades to a
+    weaker (but still real, still explained) resolution strategy instead
+    of risking a 504 on the whole request. Straggler threads aren't
+    force-killed (Python threads can't be), just no longer waited on --
+    each is already bounded by its own PROVIDER_CALL_TIMEOUT_SECONDS and
+    will finish or error out in the background; its result is simply
+    discarded once this function has already moved on.
     """
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
     from .llm_resolver import heuristic_resolve
 
-    unmatched_bank = {b["line_id"]: b for b in rule_result["unmatched_bank_lines"]}
+    cases = rule_result["needs_llm"]
+    if not cases:
+        return []
+    if not llm_resolve_fn:
+        return [(case, None) for case in cases]
+
+    candidates = list({b["line_id"]: b for b in rule_result["unmatched_bank_lines"]}.values())
+
+    pool = ThreadPoolExecutor(max_workers=LLM_MAX_CONCURRENCY)
+    future_to_case = {pool.submit(llm_resolve_fn, case, candidates): case for case in cases}
+    verdict_by_order_id: dict[str, dict | None] = {}
+    try:
+        for future in as_completed(future_to_case, timeout=max(time_budget_seconds, 0)):
+            case = future_to_case[future]
+            try:
+                verdict_by_order_id[case["order_id"]] = future.result()
+            except Exception:
+                verdict_by_order_id[case["order_id"]] = None
+    except FutureTimeoutError:
+        pass  # whatever hasn't finished falls back to the heuristic below
+    finally:
+        pool.shutdown(wait=False)  # don't block the response on stragglers
+
     verdicts = []
-    start = time.monotonic()
-    budget_exhausted = False
-    for case in rule_result["needs_llm"]:
-        candidates = list(unmatched_bank.values())
-        if not llm_resolve_fn:
-            verdicts.append((case, None))
-            continue
-        if not budget_exhausted and time.monotonic() - start >= time_budget_seconds:
-            budget_exhausted = True
-        if budget_exhausted:
+    for case in cases:
+        if case["order_id"] in verdict_by_order_id:
+            verdicts.append((case, verdict_by_order_id[case["order_id"]]))
+        else:
             fallback = heuristic_resolve(case, candidates)
             fallback["reasoning"] = ("[LLM batch time budget exhausted; fell back to heuristic] "
                                       + fallback["reasoning"])
             verdicts.append((case, fallback))
-            continue
-        verdict = llm_resolve_fn(case, candidates)
-        verdicts.append((case, verdict))
     return verdicts
 
 
