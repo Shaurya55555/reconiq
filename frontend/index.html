@@ -368,7 +368,9 @@
         </div>
         <p style="color:var(--muted); font-size:12px; margin:6px 0 0">
           Required columns &mdash; orders: order_id, amount, razorpay_payment_id, created_at.
-          settlements: settlement_id, payment_id, utr, amount, settled_at.
+          settlements: settlement_id, payment_id, utr, amount, settled_at
+          (optional payment_ids column: a quoted, comma-separated list of payment IDs
+          for one settlement row that covers more than one payment).
           bank_lines: line_id, narration, amount, value_date.
           refunds (optional): payment_id, amount.
           No ground-truth accuracy is shown for your own data (no seeded truth label to score against) &mdash;

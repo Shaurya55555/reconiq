@@ -472,17 +472,20 @@ imports `matcher.py`, contains no reconciliation logic, and is never
 imported by the FastAPI app — a build/config problem in this script
 can't break the deployed reconciliation engine.
 
-**Stated limitation, not hidden:** a single Razorpay settlement can
+**Stated limitation, being closed:** a single Razorpay settlement can
 legitimately cover more than one payment (a real batch settlement — the
 same case `matcher.py`'s `batch_settlement` pass already models for
-synthetic data). The CSV upload schema accepts one `payment_id` per
-settlement row, not a `payment_ids` list, so a multi-payment settlement
-can't yet be losslessly represented as one row. The script never drops
-that money silently: it writes one row per payment (sharing the
-settlement's `settlement_id`/UTR) and prints an explicit warning naming
-which settlements were split this way. Extending the upload schema to
-accept a `payment_ids` column is the natural next step, not attempted
-here to keep this script's blast radius to fetch-and-normalize only.
+synthetic data). This script still writes one row per payment (sharing
+the settlement's `settlement_id`/UTR) and prints an explicit warning
+naming which settlements were split this way — it never drops that money
+silently, and updating the fetch script itself to emit one row per
+settlement is still not attempted, to keep its blast radius to
+fetch-and-normalize only. But the upload path it feeds no longer forces
+that split: `POST /api/run-upload`'s settlement schema now also accepts
+an optional `payment_ids` column (a quoted, comma-separated list in one
+CSV field), so a hand-built or differently-sourced settlements.csv can
+represent a multi-payment settlement as a single row and still resolve
+via `batch_settlement`, not as separate per-payment exceptions.
 
 ## Stack
 

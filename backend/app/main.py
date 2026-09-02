@@ -121,6 +121,32 @@ def _validate_and_coerce(rows: list[dict], required: set[str], label: str) -> li
     return cleaned
 
 
+def _coerce_settlement_payment_ids(rows: list[dict]) -> list[dict]:
+    """A real Razorpay settlement can legitimately cover more than one
+    payment (a batch settlement). REQUIRED_SETTLEMENT_FIELDS still asks for
+    one `payment_id` per row (backward compatible with every existing
+    upload and with fetch_razorpay_settlements.py's one-row-per-payment
+    workaround), but a row may also carry an optional `payment_ids` column
+    -- a comma-separated list in one CSV field -- to losslessly represent a
+    multi-payment settlement as a single row instead. matcher.reconcile()
+    already reads `payment_ids` off a settlement dict (falling back to
+    `[payment_id]` when absent); this is the upload-path half of that,
+    turning the raw CSV string into the list it expects. This was the
+    roadmap gap called out in README's "Offline Razorpay Settlement API
+    adapter" section.
+    """
+    out = []
+    for row in rows:
+        row = dict(row)
+        raw = row.get("payment_ids")
+        if raw:
+            ids = [p.strip() for p in str(raw).split(",") if p.strip()]
+            if ids:
+                row["payment_ids"] = ids
+        out.append(row)
+    return out
+
+
 class OverrideRequest(BaseModel):
     orders: list[dict]
     matches: list[dict]
@@ -321,6 +347,7 @@ def run_uploaded_data(req: UploadRunRequest):
     try:
         orders = _validate_and_coerce(req.orders, REQUIRED_ORDER_FIELDS, "orders")
         settlements = _validate_and_coerce(req.settlements, REQUIRED_SETTLEMENT_FIELDS, "settlements")
+        settlements = _coerce_settlement_payment_ids(settlements)
         bank_lines = _validate_and_coerce(req.bank_lines, REQUIRED_BANK_LINE_FIELDS, "bank_lines")
         refunds = _validate_and_coerce(req.refunds, REQUIRED_REFUND_FIELDS, "refunds") if req.refunds else []
     except ValueError as exc:

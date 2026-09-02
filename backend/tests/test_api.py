@@ -106,6 +106,39 @@ def test_run_upload_endpoint_reconciles_hand_built_data_with_no_ground_truth():
     assert "ground_truth_accuracy" not in body["summary"]  # no fabricated accuracy claim
 
 
+def test_run_upload_endpoint_accepts_a_comma_delimited_payment_ids_column():
+    """A single real Razorpay settlement can cover more than one payment
+    (a batch settlement) -- the upload path previously had no way to
+    represent that as one row, only one payment_id per settlement. This
+    covers the fix: a CSV upload's settlement row carries a payment_ids
+    column (comma-delimited, as it would arrive from a quoted CSV field)
+    and both orders resolve via the batch_settlement method against one
+    bank line, not as two separate exceptions."""
+    orders = [
+        {"order_id": "ORD1", "amount": 600.0, "razorpay_payment_id": "pay_1",
+         "created_at": "2026-08-01T00:00:00", "customer": "A"},
+        {"order_id": "ORD2", "amount": 400.0, "razorpay_payment_id": "pay_2",
+         "created_at": "2026-08-01T00:00:00", "customer": "B"},
+    ]
+    settlements = [
+        {"settlement_id": "stl1", "payment_id": "pay_1", "payment_ids": "pay_1, pay_2",
+         "utr": "UTR999888777", "amount": 1000.0, "settled_at": "2026-08-02"},
+    ]
+    bank_lines = [
+        {"line_id": "bl1", "narration": "NEFT-UTR999888777-RAZORPAY",
+         "amount": 1000.0, "value_date": "2026-08-02"},
+    ]
+
+    res = client.post("/api/run-upload", json={
+        "orders": orders, "settlements": settlements, "bank_lines": bank_lines,
+    })
+    assert res.status_code == 200
+    body = res.json()
+    assert body["summary"]["matched"] == 2
+    methods = {m["order_id"]: m["method"] for m in body["matches"]}
+    assert methods == {"ORD1": "batch_settlement", "ORD2": "batch_settlement"}
+
+
 def test_run_upload_endpoint_rejects_missing_required_columns():
     res = client.post("/api/run-upload", json={
         "orders": [{"order_id": "ORD1", "amount": 100.0}],  # missing required fields
