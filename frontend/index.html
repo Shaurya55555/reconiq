@@ -7,6 +7,14 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%AE%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800;900&display=swap">
+<script>
+  // Applied before the stylesheet paints anything, so a returning visitor
+  // who chose dark never sees a flash of the light theme first.
+  try {
+    var saved = localStorage.getItem("reconiq_theme");
+    if (saved === "dark") document.documentElement.setAttribute("data-theme", "dark");
+  } catch (e) { /* private mode, storage blocked, etc. -- default to light */ }
+</script>
 <style>
   :root {
     --bg: #F4F6F8; --bg2: #FFFFFF; --panel: #FFFFFF; --panel2: #F8FAFC; --border: #E5E7EB;
@@ -18,49 +26,61 @@
     --shadow-surface: 0 4px 12px rgba(15, 23, 42, 0.06);
     --shadow-surface-hover: 0 10px 24px rgba(15, 23, 42, 0.09);
   }
+  :root[data-theme="dark"] {
+    --bg: #0d0c0a; --bg2: #110f0d; --panel: #17140f; --panel2: #1c1812; --border: #2c2721;
+    --border-soft: #201c17; --text: #f1ece2; --muted: #a89d89; --muted2: #7d7360;
+    --accent: #7b6ff0; --accent-ink: #8f84f5; --accent-dim: #26204d; --bad: #ef7570; --warn: #dfae52; --good: #6fcf97;
+    --shadow-surface: 0 4px 14px rgba(0, 0, 0, 0.4);
+    --shadow-surface-hover: 0 10px 26px rgba(0, 0, 0, 0.5);
+  }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font-family: var(--sans); line-height: 1.5;
   }
+  /* Single-row header: brand | section nav | actions -- one continuous
+     bar (logo+name, inline nav links, right-side controls) rather than
+     a separate branding row stacked over a separate sticky nav row. */
   header {
-    padding: 16px 32px; border-bottom: 1px solid var(--border-soft); display: flex;
-    justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
-    position: sticky; top: 0; z-index: 40; background: var(--bg2);
+    padding: 0 32px; border-bottom: 1px solid var(--border-soft); display: flex;
+    align-items: center; gap: 28px; position: sticky; top: 0; z-index: 40;
+    background: var(--bg2); height: 62px;
   }
-  header .brand { display: flex; align-items: center; gap: 10px; }
+  header .brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
   header .brand-mark { flex-shrink: 0; }
   header h1 { margin: 0; font-family: var(--sans); font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
   header p { margin: 1px 0 0; color: var(--muted2); font-size: 12px; }
 
-  /* Dashboard section nav -- sticks under the header once a run exists,
-     so a long report reads as a navigable dashboard instead of one
-     endless scroll. Solid backgrounds (not translucent) -- a blurred
-     translucent bar over scrolling content read as broken/ghosted, not
-     "glassy." */
+  /* Section nav -- inline in the header, only shown once a run exists
+     (a long report reads as a navigable dashboard, not one endless
+     scroll). Sits flush in the same bar as the brand, not a separate
+     sticky strip underneath it. */
   #dash-nav {
-    display: none; position: sticky; top: 57px; z-index: 30;
-    background: var(--panel2); border-bottom: 1px solid var(--border-soft);
+    display: none; flex: 1; gap: 2px; overflow-x: auto; scrollbar-width: none;
+    align-items: center; justify-content: center; height: 100%;
   }
-  #dash-nav.visible { display: block; }
-  #dash-nav .dash-nav-inner {
-    max-width: 1080px; margin: 0 auto; padding: 0 32px; display: flex;
-    gap: 4px; overflow-x: auto; scrollbar-width: none;
-  }
-  #dash-nav .dash-nav-inner::-webkit-scrollbar { display: none; }
+  #dash-nav.visible { display: flex; }
+  #dash-nav::-webkit-scrollbar { display: none; }
   #dash-nav a {
-    flex-shrink: 0; font-family: var(--sans); font-weight: 600; font-size: 13px; color: var(--muted);
-    text-decoration: none; padding: 11px 12px; border-bottom: 2px solid transparent;
-    white-space: nowrap; transition: color 0.15s ease, border-color 0.15s ease;
+    flex-shrink: 0; font-family: var(--sans); font-weight: 600; font-size: 12.5px; color: var(--muted);
+    text-decoration: none; padding: 6px 10px; border-radius: 7px;
+    white-space: nowrap; transition: color 0.15s ease, background 0.15s ease;
   }
-  #dash-nav a:hover { color: var(--text); }
-  #dash-nav a.active { color: var(--accent); border-bottom-color: var(--accent-ink); }
+  #dash-nav a:hover { color: var(--text); background: var(--panel2); }
+  #dash-nav a.active { color: var(--accent-ink); background: var(--accent-dim); }
+
+  .header-actions { display: flex; align-items: center; gap: 12px; flex-shrink: 0; margin-left: auto; }
+  #theme-toggle {
+    padding: 7px; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+    border-radius: 8px;
+  }
+  #provider-badge { color: var(--muted); font-size: 12px; white-space: nowrap; }
 
   main { max-width: 1080px; margin: 0 auto; padding: 0 32px 48px; }
   #verdict-banner, #exceptions-section, #matches-section, #charts-section,
   #audit-section, #benchmark-section, #calibration-section {
-    scroll-margin-top: 108px;
+    scroll-margin-top: 78px;
   }
   button {
     background: var(--accent-ink); color: #ffffff; border: none; padding: 12px 22px; border-radius: 10px;
@@ -122,7 +142,12 @@
   .reject-btn { color: var(--bad); border-color: var(--bad); }
   .accept-btn { color: var(--good); border-color: var(--good); }
   #chat-log { display: flex; flex-direction: column; gap: 14px; }
-  #status { color: var(--muted); font-size: 13px; display: inline-flex; align-items: center; gap: 8px; }
+  #status {
+    display: none; color: var(--text); font-size: 13px; font-weight: 600; align-items: center; gap: 8px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 9px 14px;
+    box-shadow: var(--shadow-surface); margin: 6px 0 4px;
+  }
+  #status:has(#status-text:not(:empty)), #status:has(.spinner.active) { display: inline-flex; }
   .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
   .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 700px) { .charts { grid-template-columns: 1fr; } }
@@ -164,11 +189,13 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .advanced-toggle { text-align: left; max-width: 640px; margin: 0; }
   .advanced-toggle summary {
-    cursor: pointer; color: var(--muted); font-size: 13px; text-align: left; list-style: none;
-    user-select: none;
+    cursor: pointer; color: var(--text); font-weight: 600; font-size: 13px; text-align: left; list-style: none;
+    user-select: none; display: inline-flex; align-items: center; gap: 8px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 14px; box-shadow: var(--shadow-surface); transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
   .advanced-toggle summary::-webkit-details-marker { display: none; }
-  .advanced-toggle summary:hover { color: var(--text); }
+  .advanced-toggle summary:hover { border-color: var(--accent); box-shadow: var(--shadow-surface-hover); }
   .advanced-toggle summary::before { content: "\2699️  "; }
   .advanced-panel {
     background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
@@ -201,8 +228,19 @@
   .policy-btn-title { font-weight: 700; font-size: 13px; color: var(--text); }
   .policy-btn-sub { font-size: 11px; color: var(--muted); }
   .policy-exact-values { margin-top: 10px; text-align: left; }
-  .policy-exact-values summary { font-size: 12px; color: var(--muted); cursor: pointer; }
-  .policy-exact-values p { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+  .policy-exact-values summary {
+    font-size: 12.5px; font-weight: 600; color: var(--text); cursor: pointer; list-style: none;
+    display: inline-flex; align-items: center; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 13px; box-shadow: var(--shadow-surface);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .policy-exact-values summary::-webkit-details-marker { display: none; }
+  .policy-exact-values summary::before { content: "\25b8"; margin-right: 7px; color: var(--muted); }
+  .policy-exact-values summary:hover { border-color: var(--accent); box-shadow: var(--shadow-surface-hover); }
+  .policy-exact-values p {
+    font-size: 12.5px; color: var(--muted); margin: 8px 0 0; background: var(--panel2);
+    border: 1px solid var(--border-soft); border-radius: 10px; padding: 10px 13px;
+  }
   .policy-exact-values span { color: var(--text); font-weight: 600; }
 
   /* Closing verdict */
@@ -355,6 +393,24 @@
   .evidence-table td:first-child { color: var(--muted); width: 40%; }
   .evidence-section-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; margin: 16px 0 6px; }
   .evidence-reasoning { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.5; }
+
+  /* Dark-mode counterparts for badge/banner colors that are hand-picked
+     pastel-bg/saturated-text pairs, not derived from the shared tokens
+     above -- those tokens re-theme automatically, these don't. */
+  [data-theme="dark"] .tag.exact { background: #123a35; color: var(--good); }
+  [data-theme="dark"] .tag.fuzzy { background: #3a3312; color: var(--warn); }
+  [data-theme="dark"] .tag.llm { background: #1a2b4a; color: #7aa2f7; }
+  [data-theme="dark"] .tag.human_override { background: #2a1a3a; color: #c792ea; }
+  [data-theme="dark"] .tag.group_split { background: #123449; color: #56c8e0; }
+  [data-theme="dark"] .tag.batch_settlement { background: #1a3324; color: #7ee08a; }
+  [data-theme="dark"] .tag.refunded { background: #2a2440; color: #b39ddb; }
+  [data-theme="dark"] .tag.exception { background: #3a1414; color: var(--bad); }
+  [data-theme="dark"] .tag.priority-high { background: #3a1414; color: var(--bad); }
+  [data-theme="dark"] .tag.priority-medium { background: #3a3312; color: var(--warn); }
+  [data-theme="dark"] .verdict-banner.can-close { background: #142b21; border-color: #1f4534; }
+  [data-theme="dark"] .verdict-banner.cannot-close { background: #2e2412; border-color: #4d3c1a; }
+  [data-theme="dark"] .evidence-verdict.matched { background: #123a35; color: var(--good); }
+  [data-theme="dark"] .evidence-verdict.exception { background: #3a1414; color: var(--bad); }
 </style>
 </head>
 <body>
@@ -369,10 +425,7 @@
       <p>AI Finance Controller &middot; orders &times; Razorpay settlements &times; bank statement</p>
     </div>
   </div>
-  <div id="provider-badge" style="color: var(--muted); font-size: 12px;"></div>
-</header>
-<nav id="dash-nav">
-  <div class="dash-nav-inner">
+  <nav id="dash-nav">
     <a href="#verdict-banner" data-nav>Overview</a>
     <a href="#exceptions-section" data-nav>Exceptions</a>
     <a href="#matches-section" data-nav>Matches</a>
@@ -380,8 +433,19 @@
     <a href="#audit-section" data-nav>Audit trail</a>
     <a href="#chat-section" data-nav>Ask</a>
     <a href="#benchmark-section" data-nav>Robustness</a>
+  </nav>
+  <div class="header-actions">
+    <button id="theme-toggle" class="secondary" title="Switch theme">
+      <svg id="theme-icon-light" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
+      </svg>
+      <svg id="theme-icon-dark" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+        <path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z"/>
+      </svg>
+    </button>
+    <div id="provider-badge"></div>
   </div>
-</nav>
+</header>
 <main>
   <section class="hero">
     <h2 class="hero-title">Verify every <span class="accent-word">rupee</span>.<br>Escalate what can't be proven.</h2>
@@ -697,6 +761,31 @@ function restoreRunFromStorage() {
 }
 
 const $ = (id) => document.getElementById(id);
+
+function applyThemeIcons() {
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
+  $("theme-icon-light").style.display = dark ? "none" : "";
+  $("theme-icon-dark").style.display = dark ? "" : "none";
+  $("theme-toggle").title = dark ? "Switch to light theme" : "Switch to dark theme";
+}
+function toggleTheme() {
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
+  if (dark) {
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    document.documentElement.setAttribute("data-theme", "dark");
+  }
+  try { localStorage.setItem("reconiq_theme", dark ? "light" : "dark"); } catch (e) { /* non-fatal */ }
+  applyThemeIcons();
+  // Re-render any already-drawn charts so their hardcoded SVG colors
+  // (not CSS-variable-driven) switch palettes immediately too.
+  if (currentRun) {
+    renderMethodChart(currentRun.matches);
+    renderExceptionChart(currentRun.exceptions);
+  }
+}
+applyThemeIcons();
+$("theme-toggle").addEventListener("click", toggleTheme);
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const pct = (x) => (x * 100).toFixed(1) + "%";
 const rupees = (x) => "₹" + Number(x).toLocaleString("en-IN", { maximumFractionDigits: 0 });
@@ -709,9 +798,19 @@ function formatDuration(totalSeconds) {
 }
 const tagFor = (method) => `<span class="tag ${esc(method)}">${esc(method)}</span>`;
 
-const METHOD_COLORS = { exact: "#059669", fuzzy: "#D97706", group_split: "#0891B2", batch_settlement: "#16A34A", refunded: "#9333EA", llm: "#2563EB", human_override: "#7C3AED" };
+// SVG fill colors can't read CSS custom properties directly, so these
+// carry their own light/dark pair, picked via isDarkTheme() at render time.
+const METHOD_COLORS_LIGHT = { exact: "#059669", fuzzy: "#D97706", group_split: "#0891B2", batch_settlement: "#16A34A", refunded: "#9333EA", llm: "#2563EB", human_override: "#7C3AED" };
+const METHOD_COLORS_DARK  = { exact: "#6fcf97", fuzzy: "#f2c94c", group_split: "#56c8e0", batch_settlement: "#7ee08a", refunded: "#b39ddb", llm: "#7aa2f7", human_override: "#c792ea" };
 const ALL_METHODS = ["exact", "fuzzy", "group_split", "batch_settlement", "refunded", "llm", "human_override"];
-const EXCEPTION_COLOR = "#DC2626";
+function isDarkTheme() { return document.documentElement.getAttribute("data-theme") === "dark"; }
+function methodColor(label) { return (isDarkTheme() ? METHOD_COLORS_DARK : METHOD_COLORS_LIGHT)[label] || (isDarkTheme() ? "#7d7360" : "#9CA3AF"); }
+function exceptionColor() { return isDarkTheme() ? "#f47174" : "#DC2626"; }
+function chartLineColors() {
+  return isDarkTheme()
+    ? { good: "#6fcf97", accent: "#7aa2f7", warn: "#f2c94c" }
+    : { good: "#059669", accent: "#2563EB", warn: "#D97706" };
+}
 
 function setStatus(text, loading) {
   $("status-text").textContent = text;
@@ -1239,14 +1338,14 @@ function renderMethodChart(matches) {
   const counts = {};
   matches.forEach(m => counts[m.method] = (counts[m.method] || 0) + 1);
   const entries = ALL_METHODS.filter(k => counts[k]).map(k => [k, counts[k]]);
-  barChart("chart-methods", entries, (label) => METHOD_COLORS[label] || "#9CA3AF");
+  barChart("chart-methods", entries, (label) => methodColor(label));
 }
 
 function renderExceptionChart(exceptions) {
   const counts = {};
   exceptions.forEach(e => counts[e.type] = (counts[e.type] || 0) + 1);
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  barChart("chart-exceptions", entries, () => EXCEPTION_COLOR);
+  barChart("chart-exceptions", entries, () => exceptionColor());
 }
 
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
