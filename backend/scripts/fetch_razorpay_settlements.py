@@ -38,6 +38,15 @@ prints an explicit warning listing which settlement_ids were split this
 way, so nothing is hidden -- extending the upload schema to accept a
 payment_ids column is a natural next step, not attempted here to keep
 this script's blast radius to "fetch and normalize" only.
+
+Also writes refunds.csv from the same fetch. The recon-combined response
+already includes refund line items (`type: "refund"`) right alongside
+the payment rows this script was already reading for settlements.csv --
+each one carries its own `payment_id` straight back to the original
+payment (see normalize_refunds below). Earlier versions of this script
+fetched those rows and then discarded them, requiring refund data to be
+supplied as a separately hand-built file; this closes that gap, so one
+fetch now produces both settlements.csv and refunds.csv.
 """
 from __future__ import annotations
 
@@ -143,27 +152,54 @@ def normalize_settlements(items: list[dict]) -> tuple[list[dict], list[str]]:
     return rows, warnings
 
 
-def write_csv(rows: list[dict], out_path: Path) -> None:
+def normalize_refunds(items: list[dict]) -> list[dict]:
+    """Extract refund line items from the same recon-combined response
+    already fetched for settlements. Only type == "refund" rows carry a
+    refund reference (via `entity_id`); each also carries a `payment_id`
+    field pointing back at the original payment -- unlike payment rows,
+    where `payment_id` is unused (see normalize_settlements), this is
+    exactly the field refund rows populate it for.
+
+    ReconIQ's refunds.csv schema doesn't require a `type` (full/partial)
+    column -- matcher.py never reads it, it only compares refund amounts
+    against order/settlement amounts -- and Razorpay's recon feed doesn't
+    cleanly distinguish the two at the line-item level anyway, so this
+    doesn't invent a value for it.
+    """
+    refund_items = [i for i in items if i.get("type") == "refund" and i.get("entity_id")]
+    rows: list[dict] = []
+    for item in refund_items:
+        amount = item.get("debit") or item.get("amount") or 0
+        rows.append({
+            "payment_id": item.get("payment_id", ""),
+            "amount": round(amount / 100, 2),  # paise -> rupees
+            "refund_id": item["entity_id"],
+            "refunded_at": _iso_date(item.get("created_at")),
+        })
+    return rows
+
+
+def write_csv(rows: list[dict], out_path: Path, fieldnames: list[str], label: str) -> None:
     if not rows:
-        print(f"No settlement rows to write -- {out_path} not created.", file=sys.stderr)
+        print(f"No {label} rows to write -- {out_path} not created.", file=sys.stderr)
         return
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["settlement_id", "payment_id", "utr", "amount", "settled_at"]
     with out_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
-    print(f"Wrote {len(rows)} settlement rows to {out_path}")
+    print(f"Wrote {len(rows)} {label} rows to {out_path}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Fetch Razorpay settlements for one month and normalize "
-                     "them into ReconIQ's settlements.csv schema.")
+        description="Fetch Razorpay settlements (and refunds) for one month "
+                     "and normalize them into ReconIQ's CSV schemas.")
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--month", type=int, required=True)
     parser.add_argument("--day", type=int, default=None)
     parser.add_argument("--out", type=Path, default=Path("razorpay_export/settlements.csv"))
+    parser.add_argument("--refunds-out", type=Path, default=Path("razorpay_export/refunds.csv"))
     args = parser.parse_args()
 
     print(f"Fetching settlement recon details for {args.year}-{args.month:02d}"
@@ -171,14 +207,19 @@ def main() -> None:
     items = fetch_recon_items(args.year, args.month, args.day)
     print(f"Fetched {len(items)} raw recon items.")
 
-    rows, warnings = normalize_settlements(items)
+    settlement_rows, warnings = normalize_settlements(items)
     for w in warnings:
         print(f"WARNING: {w}", file=sys.stderr)
+    write_csv(settlement_rows, args.out,
+              ["settlement_id", "payment_id", "utr", "amount", "settled_at"], "settlement")
 
-    write_csv(rows, args.out)
-    print("\nNext step: upload this file (alongside your own orders.csv and "
+    refund_rows = normalize_refunds(items)
+    write_csv(refund_rows, args.refunds_out,
+              ["payment_id", "amount", "refund_id", "refunded_at"], "refund")
+
+    print("\nNext step: upload these files (alongside your own orders.csv and "
           "bank_lines.csv) via the dashboard's 'Bring your own data' panel, "
-          "or POST it to /api/run-upload directly.")
+          "or POST them to /api/run-upload directly.")
 
 
 if __name__ == "__main__":

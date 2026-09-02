@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from fetch_razorpay_settlements import normalize_settlements  # noqa: E402
+from fetch_razorpay_settlements import normalize_refunds, normalize_settlements  # noqa: E402
 
 
 def test_single_payment_settlement_normalizes_to_one_clean_row():
@@ -60,4 +60,41 @@ def test_amount_converts_paise_to_rupees():
     items = [{"type": "payment", "entity_id": "pay_1", "settlement_id": "stl_3",
               "settlement_utr": "UTR444", "credit": 123456, "settled_at": 1735689600}]
     rows, _ = normalize_settlements(items)
+    assert rows[0]["amount"] == 1234.56
+
+
+def test_normalize_refunds_extracts_refund_rows_from_the_same_recon_feed():
+    """The recon-combined response already carries refund line items
+    alongside the payment rows this script was already fetching for
+    settlements.csv -- this is what actually closes the gap where refund
+    data used to require a separately hand-supplied file."""
+    items = [
+        {"type": "payment", "entity_id": "pay_X", "settlement_id": "stl_2",
+         "settlement_utr": "UTR333", "credit": 10000, "settled_at": 1735689600},
+        {"type": "refund", "entity_id": "rfnd_1", "payment_id": "pay_X",
+         "settlement_id": "stl_2", "settlement_utr": "UTR333", "debit": 2000,
+         "created_at": 1735776000},
+        {"type": "transfer", "entity_id": "trf_1", "settlement_id": "stl_2",
+         "settlement_utr": "UTR333", "debit": 500},
+    ]
+    refund_rows = normalize_refunds(items)
+    assert refund_rows == [{
+        "payment_id": "pay_X", "amount": 20.0, "refund_id": "rfnd_1",
+        "refunded_at": "2025-01-02",
+    }]
+
+
+def test_normalize_refunds_ignores_payment_and_transfer_rows():
+    items = [
+        {"type": "payment", "entity_id": "pay_X", "settlement_id": "stl_2",
+         "credit": 10000, "settled_at": 1735689600},
+        {"type": "transfer", "entity_id": "trf_1", "settlement_id": "stl_2", "debit": 500},
+    ]
+    assert normalize_refunds(items) == []
+
+
+def test_normalize_refunds_converts_paise_to_rupees():
+    items = [{"type": "refund", "entity_id": "rfnd_9", "payment_id": "pay_9",
+              "debit": 123456, "created_at": 1735689600}]
+    rows = normalize_refunds(items)
     assert rows[0]["amount"] == 1234.56

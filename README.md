@@ -453,10 +453,15 @@ to keep it caught.
 ## Offline Razorpay Settlement API adapter
 
 `backend/scripts/fetch_razorpay_settlements.py` fetches real settlement
-data from Razorpay's Settlement Recon Details API and normalizes it into
-the same `settlements.csv` schema the bring-your-own-data upload path
-already accepts — a credibility layer proving the engine can consume
-real Razorpay data, not a replacement for the synthetic evaluation mode.
+*and refund* data from Razorpay's Settlement Recon Details API and
+normalizes both into the same `settlements.csv`/`refunds.csv` schemas the
+bring-your-own-data upload path already accepts — a credibility layer
+proving the engine can consume real Razorpay data, not a replacement for
+the synthetic evaluation mode. Refunds come from the same fetch: the
+recon-combined response already tags refund line items (`type:
+"refund"`) alongside the payment rows, each carrying its own `payment_id`
+back to the original payment — so this needs one API call, not a
+separately hand-built refunds file.
 
 **Deliberately not a live "Connect Razorpay" button in the deployed
 app.** Run it offline, once, before a demo:
@@ -465,10 +470,10 @@ app.** Run it offline, once, before a demo:
 export RAZORPAY_KEY_ID=rzp_test_...      # Test Mode keys, never Live
 export RAZORPAY_KEY_SECRET=...           # never commit, never print
 python backend/scripts/fetch_razorpay_settlements.py --year 2026 --month 8
-# writes razorpay_export/settlements.csv
+# writes razorpay_export/settlements.csv and razorpay_export/refunds.csv
 ```
 
-Then upload that file (alongside your own `orders.csv` and
+Then upload those files (alongside your own `orders.csv` and
 `bank_lines.csv`) through the dashboard's "Bring your own data" panel, or
 `POST /api/run-upload` directly — the exact same pipeline that runs on
 synthetic data runs on this.
