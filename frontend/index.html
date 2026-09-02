@@ -569,6 +569,24 @@
 const API = "";
 let currentRun = null; // {run_id, summary, matches, exceptions, audit_trail}
 
+// Reviewer overrides (accept/reject) previously vanished on refresh since
+// the backend is intentionally stateless (see api/run-upload -- no server-
+// side run storage). Persisting the current run client-side in
+// localStorage means a refresh restores exactly what the reviewer was
+// looking at, overrides included, without touching that stateless design.
+const RUN_STORAGE_KEY = "reconiq_current_run";
+function saveRunToStorage() {
+  try { localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify(currentRun)); } catch (e) { /* private mode, quota, etc. -- non-fatal */ }
+}
+function restoreRunFromStorage() {
+  try {
+    const raw = localStorage.getItem(RUN_STORAGE_KEY);
+    if (!raw) return false;
+    currentRun = JSON.parse(raw);
+    return !!(currentRun && currentRun.run_id);
+  } catch (e) { return false; }
+}
+
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const pct = (x) => (x * 100).toFixed(1) + "%";
@@ -721,6 +739,7 @@ function renderAll(scrollTo = true) {
   $("dash-nav").classList.add("visible");
   $("chat-fab").classList.add("visible");
   initScrollSpy();
+  saveRunToStorage();
 
   if (scrollTo) $("results").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -1365,6 +1384,11 @@ function renderCalibration(data) {
 }
 
 $("calib-run-btn").addEventListener("click", runCalibration);
+
+if (restoreRunFromStorage()) {
+  renderAll(false);
+  setStatus(`Restored run ${currentRun.run_id} from your last session.`, false);
+}
 </script>
 </body>
 </html>
