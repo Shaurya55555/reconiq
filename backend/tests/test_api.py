@@ -187,3 +187,27 @@ def test_ask_endpoint_can_answer_about_a_matched_order_not_just_exceptions():
     })
     assert res.status_code == 200
     assert matched_order_id in res.json()["answer"]
+
+
+def test_ask_endpoint_answers_closing_verdict_and_rules_vs_ai_questions():
+    """Regression coverage for the chat expansion: verdict and
+    rules_only_summary must flow end to end from /api/run through to
+    /api/ask so questions about closing status and AI uplift are
+    answerable, not just questions about a single named order."""
+    run = client.post("/api/run", json={"n_orders": 30, "seed": 6}).json()
+
+    res = client.post("/api/ask", json={
+        "question": "can I close the books?",
+        "summary": run["summary"], "exceptions": run["exceptions"], "matches": run["matches"],
+        "verdict": run["verdict"],
+    })
+    assert res.status_code == 200
+    assert len(res.json()["answer"]) > 0
+
+    res2 = client.post("/api/ask", json={
+        "question": "does the AI actually help here?",
+        "summary": run["summary"], "exceptions": run["exceptions"], "matches": run["matches"],
+        "rules_only_summary": run["rules_only_summary"],
+    })
+    assert res2.status_code == 200
+    assert len(res2.json()["answer"]) > 0

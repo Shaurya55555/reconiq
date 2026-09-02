@@ -35,6 +35,8 @@ class AskRequest(BaseModel):
     summary: dict
     exceptions: list[dict]
     matches: list[dict] = []
+    verdict: dict | None = None
+    rules_only_summary: dict | None = None
 
 
 def _apply_ground_truth_to_summary(summary: dict, ground_truth: dict) -> None:
@@ -398,7 +400,8 @@ def override(req: OverrideRequest):
 
 @app.post("/api/ask")
 def ask(req: AskRequest):
-    answer = llm_resolver.answer_question(req.question, req.summary, req.exceptions, req.matches)
+    answer = llm_resolver.answer_question(req.question, req.summary, req.exceptions, req.matches,
+                                           req.verdict, req.rules_only_summary)
     return {"answer": answer}
 
 

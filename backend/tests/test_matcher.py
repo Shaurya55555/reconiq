@@ -732,3 +732,33 @@ def test_generated_refunded_after_settlement_orders_resolve_as_matched():
     for oid in order_ids:
         match = next(m for m in final["matches"] if m["order_id"] == oid)
         assert match["method"] in ("exact", "fuzzy")
+
+
+# ---- "Ask about this run" -- expanded coverage (verdict, rules-vs-AI, etc.) ----
+
+def test_heuristic_answer_covers_closing_verdict_question():
+    summary = {"matched": 1, "total_orders": 1, "match_rate": 1.0, "exception_count": 0}
+    verdict = {"can_close": False, "message": "₹5,000 remains unresolved, including ₹5,000 above your materiality threshold (₹5,000)."}
+    answer = llm_resolver._heuristic_answer("can I close the books?", summary, [], [], verdict, None)
+    assert "5,000" in answer
+
+
+def test_heuristic_answer_covers_rules_vs_ai_question():
+    summary = {"matched": 92, "total_orders": 100, "match_rate": 0.92, "exception_count": 8}
+    rules_only = {"match_rate": 0.90}
+    answer = llm_resolver._heuristic_answer("does the AI actually help?", summary, [], [], None, rules_only)
+    assert "90.0%" in answer and "92.0%" in answer
+
+
+def test_heuristic_answer_covers_false_clear_question():
+    summary = {"matched": 1, "total_orders": 1, "match_rate": 1.0, "exception_count": 0,
+               "false_clear_amount": 0, "safe_miss_amount": 1200.0}
+    answer = llm_resolver._heuristic_answer("what's the false-clear amount?", summary, [], [])
+    assert "0" in answer and "1,200" in answer
+
+
+def test_heuristic_answer_covers_method_breakdown_question():
+    summary = {"matched": 3, "total_orders": 3, "match_rate": 1.0, "exception_count": 0,
+               "by_method": {"exact": 2, "llm": 1}}
+    answer = llm_resolver._heuristic_answer("how were these matched?", summary, [], [])
+    assert "exact" in answer and "llm" in answer

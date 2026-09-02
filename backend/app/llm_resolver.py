@@ -135,11 +135,15 @@ _PROVIDERS = {
 
 
 QA_SYSTEM_PROMPT = """You are a reconciliation analyst answering a question about one \
-completed reconciliation run. You are given the run's summary metrics, its exception \
-list (records that could not be auto-matched), and -- if the question named a specific \
-order -- that order's own match or exception record. Answer only from this data, in 2-4 \
-sentences. If the question asks for something not present in the data, say so explicitly \
-rather than guessing."""
+completed reconciliation run. You are given: the run's summary metrics (including \
+match rate, verified/value-weighted accuracy, false-clear and safe-miss amounts, and a \
+by_method breakdown of how matches were resolved); its exception list (records that \
+could not be auto-matched); the closing verdict (whether the batch is safe to close, and \
+why); the rules-only-vs-rules+AI comparison for this same batch, if available (to answer \
+questions about whether/how much the AI layer helped); and -- if the question named a \
+specific order -- that order's own match or exception record. Answer only from this \
+data, in 2-4 sentences. If the question asks for something not present in the data, say \
+so explicitly rather than guessing."""
 
 _ORDER_ID_RE = re.compile(r"\bORD[A-Za-z0-9_-]*\d[A-Za-z0-9_-]*\b", re.IGNORECASE)
 
@@ -167,7 +171,8 @@ def _find_order_record(question: str, exceptions: list[dict], matches: list[dict
 
 
 def _heuristic_answer(question: str, summary: dict, exceptions: list[dict],
-                       matches: list[dict] | None = None) -> str:
+                       matches: list[dict] | None = None, verdict: dict | None = None,
+                       rules_only_summary: dict | None = None) -> str:
     matches = matches or []
     found = _find_order_record(question, exceptions, matches)
     if found:
@@ -185,6 +190,37 @@ def _heuristic_answer(question: str, summary: dict, exceptions: list[dict],
     for e in exceptions:
         by_type[e["type"]] = by_type.get(e["type"], 0) + 1
 
+    if any(w in q for w in ("close the book", "safe to close", "can i close", "closing")):
+        if verdict:
+            return verdict["message"] + (" Safe to close." if verdict["can_close"] else "")
+        return "No closing verdict is available for this run."
+    if any(w in q for w in ("rules only", "rules vs", "rules-only", "does ai help",
+                             "ai contribute", "ai actually", "uplift", "worth it")):
+        if rules_only_summary:
+            uplift_pp = round((summary["match_rate"] - rules_only_summary["match_rate"]) * 100, 1)
+            return (f"Rules-only would have matched {rules_only_summary['match_rate']:.1%} "
+                    f"of orders; with the AI layer it's {summary['match_rate']:.1%} "
+                    f"({uplift_pp:+.1f}pp), on the exact same batch.")
+        return "No rules-only comparison is available for this run."
+    if any(w in q for w in ("false clear", "false-clear", "safe miss", "safe-miss",
+                             "how wrong", "confidently wrong")):
+        fc = summary.get("false_clear_amount")
+        sm = summary.get("safe_miss_amount")
+        if fc is not None:
+            return (f"False-clear amount (confidently wrong, the dangerous failure): "
+                    f"₹{fc:,.0f}. Safe-miss amount (conservative, flagged instead of "
+                    f"moving wrong): ₹{sm:,.0f}.")
+        return "No ground-truth scoring is available for this run (uploaded data has no seeded truth)."
+    if any(w in q for w in ("refund",)):
+        refunded = summary.get("total_amount_refunded")
+        if refunded:
+            return f"₹{refunded:,.0f} was refunded in this run, tracked separately from reconciled settlement money."
+        return "No refunded amount in this run."
+    if any(w in q for w in ("method", "how were", "how was", "resolved by", "matched by")):
+        bm = summary.get("by_method") or {}
+        if bm:
+            breakdown = ", ".join(f"{v} {k}" for k, v in sorted(bm.items(), key=lambda x: -x[1]))
+            return f"Matches by method: {breakdown}."
     if "match rate" in q or "how many matched" in q:
         return (f"{summary['matched']} of {summary['total_orders']} orders matched "
                 f"({summary['match_rate']:.1%}), with {summary['exception_count']} exceptions.")
@@ -197,6 +233,14 @@ def _heuristic_answer(question: str, summary: dict, exceptions: list[dict],
         return (f"This run processed {summary['total_orders']} orders in "
                 f"{summary.get('elapsed_seconds', '?')}s "
                 f"({summary.get('throughput_records_per_sec', '?')} records/sec).")
+    if any(w in q for w in ("at risk", "reconciled", "processed", "amount")):
+        parts = []
+        if summary.get("total_amount_matched") is not None:
+            parts.append(f"₹{summary['total_amount_matched']:,.0f} reconciled")
+        if summary.get("total_amount_at_risk") is not None:
+            parts.append(f"₹{summary['total_amount_at_risk']:,.0f} at risk")
+        if parts:
+            return ", ".join(parts) + " in this run."
     if by_type:
         breakdown = ", ".join(f"{v} {k}" for k, v in sorted(by_type.items(), key=lambda x: -x[1]))
         return (f"I can't answer that precisely offline, but for context: match rate is "
@@ -206,17 +250,20 @@ def _heuristic_answer(question: str, summary: dict, exceptions: list[dict],
 
 
 def answer_question(question: str, summary: dict, exceptions: list[dict],
-                     matches: list[dict] | None = None) -> str:
+                     matches: list[dict] | None = None, verdict: dict | None = None,
+                     rules_only_summary: dict | None = None) -> str:
     matches = matches or []
     provider = os.getenv("LLM_PROVIDER", "").lower()
     if provider not in _PROVIDERS:
-        return _heuristic_answer(question, summary, exceptions, matches)
+        return _heuristic_answer(question, summary, exceptions, matches, verdict, rules_only_summary)
 
     found = _find_order_record(question, exceptions, matches)
     order_context = f"\nNamed order lookup: {json.dumps(found)}" if found else ""
+    verdict_context = f"\nClosing verdict: {json.dumps(verdict)}" if verdict else ""
+    rules_context = f"\nRules-only comparison: {json.dumps(rules_only_summary)}" if rules_only_summary else ""
     context = (f"Summary: {json.dumps(summary)}\n"
                f"Exceptions ({len(exceptions)}): {json.dumps(exceptions[:50])}"
-               f"{order_context}\n"
+               f"{order_context}{verdict_context}{rules_context}\n"
                f"Question: {question}")
     try:
         if provider == "openai":
@@ -257,8 +304,9 @@ def answer_question(question: str, summary: dict, exceptions: list[dict],
             resp.raise_for_status()
             return resp.json()["response"]
     except Exception as exc:
-        return f"[{provider} call failed: {exc}] " + _heuristic_answer(question, summary, exceptions, matches)
-    return _heuristic_answer(question, summary, exceptions, matches)
+        return (f"[{provider} call failed: {exc}] "
+                + _heuristic_answer(question, summary, exceptions, matches, verdict, rules_only_summary))
+    return _heuristic_answer(question, summary, exceptions, matches, verdict, rules_only_summary)
 
 
 def resolve(case: dict, candidates: list[dict]) -> dict:
