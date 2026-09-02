@@ -21,6 +21,7 @@ reason code, never silently dropped.
 """
 from __future__ import annotations
 
+import time
 from datetime import date, datetime, timezone
 from itertools import combinations
 from typing import Any
@@ -323,19 +324,49 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
 DEFAULT_LLM_CONFIDENCE_THRESHOLD = 0.6
 
 
-def resolve_llm_verdicts(rule_result: dict, llm_resolve_fn) -> list[tuple[dict, dict | None]]:
+LLM_BATCH_TIME_BUDGET_SECONDS = 6.0
+
+
+def resolve_llm_verdicts(rule_result: dict, llm_resolve_fn,
+                          time_budget_seconds: float = LLM_BATCH_TIME_BUDGET_SECONDS
+                          ) -> list[tuple[dict, dict | None]]:
     """Call the LLM resolver exactly once per rule-deferred case, independent
     of the accept/reject confidence threshold. Split out from
     apply_llm_resolutions so a calibration sweep across many threshold
     values (see /api/calibrate) can reuse one round of LLM calls instead of
     repeating the same (slow, rate-limited, real-money-in-API-cost) calls
     once per threshold it wants to evaluate.
+
+    Each provider call already carries its own short timeout (see
+    llm_resolver.PROVIDER_CALL_TIMEOUT_SECONDS), but a batch with many
+    deferred cases could still add those up past the serverless function's
+    own time limit. This tracks wall-clock time across the whole batch and,
+    once the budget is spent, stops calling the network provider for the
+    remaining cases and resolves them with the same offline heuristic a
+    single provider failure already falls back to -- so a large batch
+    degrades to a weaker (but still real, still explained) resolution
+    strategy instead of risking a 504 on the whole request.
     """
+    from .llm_resolver import heuristic_resolve
+
     unmatched_bank = {b["line_id"]: b for b in rule_result["unmatched_bank_lines"]}
     verdicts = []
+    start = time.monotonic()
+    budget_exhausted = False
     for case in rule_result["needs_llm"]:
         candidates = list(unmatched_bank.values())
-        verdict = llm_resolve_fn(case, candidates) if llm_resolve_fn else None
+        if not llm_resolve_fn:
+            verdicts.append((case, None))
+            continue
+        if not budget_exhausted and time.monotonic() - start >= time_budget_seconds:
+            budget_exhausted = True
+        if budget_exhausted:
+            fallback = heuristic_resolve(case, candidates)
+            fallback["reasoning"] = ("[LLM batch time budget exhausted; fell back to heuristic] "
+                                      + fallback["reasoning"])
+            verdicts.append((case, fallback))
+            continue
+        verdict = llm_resolve_fn(case, candidates)
         verdicts.append((case, verdict))
     return verdicts
 

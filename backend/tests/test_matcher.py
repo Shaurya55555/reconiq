@@ -630,6 +630,34 @@ def test_stricter_confidence_threshold_never_accepts_more_llm_matches():
     assert strict_llm_matches <= lenient_llm_matches
 
 
+def test_resolve_llm_verdicts_degrades_to_heuristic_once_time_budget_is_spent():
+    """A batch with many rule-deferred cases must never let per-call network
+    latency add up past the serverless function's own timeout: once the
+    wall-clock budget for the whole LLM pass is spent, remaining cases fall
+    back to the offline heuristic instead of making another provider call.
+    Regression guard for the Vercel 504 risk on large batches."""
+    batch = data_gen.generate_batch(n_orders=200, seed=3)
+    rule_result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                     refunds=batch["refunds"])
+    assert len(rule_result["needs_llm"]) >= 2, "need at least 2 deferred cases for this test to mean anything"
+
+    calls = []
+
+    def fake_slow_resolver(case, candidates):
+        calls.append(case["order_id"])
+        return {"bank_line_id": None, "confidence": 0.0, "reasoning": "fake provider call"}
+
+    case_verdicts = matcher.resolve_llm_verdicts(rule_result, fake_slow_resolver, time_budget_seconds=0.0)
+
+    # budget is already spent before the first case, so the fake network
+    # resolver must never be called at all
+    assert calls == []
+    assert len(case_verdicts) == len(rule_result["needs_llm"])
+    for case, verdict in case_verdicts:
+        assert verdict is not None
+        assert "time budget exhausted" in verdict["reasoning"]
+
+
 # ---- "Ask about this run" -- order lookup must cover matched orders too ----
 
 def test_heuristic_answer_finds_a_matched_order_by_id():

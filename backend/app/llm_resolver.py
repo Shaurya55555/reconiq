@@ -70,9 +70,17 @@ def heuristic_resolve(case: dict, candidates: list[dict]) -> dict:
     }
 
 
+# Hard per-call ceiling so one slow provider response can't by itself eat
+# the whole serverless function budget (Vercel's default is 10s and this
+# repo doesn't override it -- see vercel.json). resolve_llm_verdicts() in
+# matcher.py layers a second, wall-clock budget on top of this across the
+# whole batch of deferred cases.
+PROVIDER_CALL_TIMEOUT_SECONDS = 4.0
+
+
 def _call_openai(case, candidates) -> dict | None:
     from openai import OpenAI
-    client = OpenAI()
+    client = OpenAI(timeout=PROVIDER_CALL_TIMEOUT_SECONDS)
     resp = client.chat.completions.create(
         model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
         messages=[
@@ -87,7 +95,7 @@ def _call_openai(case, candidates) -> dict | None:
 
 def _call_anthropic(case, candidates) -> dict | None:
     import anthropic
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(timeout=PROVIDER_CALL_TIMEOUT_SECONDS)
     resp = client.messages.create(
         model=os.getenv("LLM_MODEL", "claude-haiku-4-5-20251001"),
         max_tokens=300,
@@ -101,7 +109,10 @@ def _call_anthropic(case, candidates) -> dict | None:
 
 def _call_gemini(case, candidates) -> dict | None:
     from google import genai
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    client = genai.Client(
+        api_key=os.environ["GEMINI_API_KEY"],
+        http_options={"timeout": int(PROVIDER_CALL_TIMEOUT_SECONDS * 1000)},
+    )
     resp = client.models.generate_content(
         model=os.getenv("LLM_MODEL", "gemini-flash-lite-latest"),
         contents=SYSTEM_PROMPT + "\n\n" + _build_user_prompt(case, candidates),
