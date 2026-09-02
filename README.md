@@ -307,11 +307,13 @@ keyword-matched question answering), not a model. That's a legitimate
 fallback — the app is fully functional and the reasoning is real, just
 weaker — but it should never be presented as "the LLM reasoning" in a
 demo unless a provider key is actually configured. **The live deployment
-does have a provider configured** (`LLM_PROVIDER=gemini`,
-`gemini-flash-lite-latest`) — the exception resolution and chat answers
-you get from the hosted demo are genuine model calls, verified against
-the live API, not the heuristic. The heuristic path stays as a real,
-tested fallback for offline/no-key use, and both are covered above.
+is configured with a provider** (`LLM_PROVIDER=groq`,
+`llama-3.3-70b-versatile` — switched from Gemini after Gemini's
+15 req/min free-tier limit was hit during testing; see `.env.example`) —
+the exception resolution and chat answers you get from the hosted demo
+are genuine model calls, verified against the live API, not the
+heuristic. The heuristic path stays as a real, tested fallback for
+offline/no-key use, and both are covered above.
 
 ## Per-decision evidence
 
@@ -376,9 +378,9 @@ frontend/index.html (static dashboard, no build step)
 ```
 
 `llm_resolver.py` is provider-pluggable via `LLM_PROVIDER`
-(`openai` / `anthropic` / `gemini` / `ollama`); with none configured it
-runs a deterministic offline heuristic (amount match + digit-sequence
-similarity) so the whole app works with zero API keys.
+(`groq` / `openai` / `anthropic` / `gemini` / `ollama`); with none
+configured it runs a deterministic offline heuristic (amount match +
+digit-sequence similarity) so the whole app works with zero API keys.
 
 The API is deliberately **stateless**: `POST /api/run` returns the full
 result (summary, matches, exceptions, audit trail, ground truth) in one
@@ -504,7 +506,7 @@ serverless function.
 
 | Setting | Where | Default | Notes |
 |---|---|---|---|
-| `LLM_PROVIDER` | env | unset (offline heuristic); live deployment sets `gemini` | `openai` \| `anthropic` \| `gemini` \| `ollama` |
+| `LLM_PROVIDER` | env | unset (offline heuristic); live deployment sets `groq` | `groq` \| `openai` \| `anthropic` \| `gemini` \| `ollama` |
 | `LLM_MODEL` | env | provider-specific | override the specific model used |
 | `LLM_CONFIDENCE_THRESHOLD` | env, or `confidence_threshold` in the `/api/run` request | `0.6` | auto-accept bar for an LLM-proposed match |
 | `FEE_TOLERANCE_PCT` | constant in `matcher.py`, or `fee_tolerance_pct` request field | `0.03` | would be per-merchant configurable in production, not a hardcoded constant, since real fee schedules vary by payment method and merchant category |

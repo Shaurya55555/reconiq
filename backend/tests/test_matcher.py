@@ -61,6 +61,30 @@ def test_garbled_narration_is_deferred_to_llm_layer():
             assert order["order_id"] in deferred_orders
 
 
+def test_groq_is_a_registered_provider_and_falls_back_cleanly_on_error(monkeypatch):
+    """Groq (OpenAI-compatible API, reuses the openai SDK dependency) is
+    the new recommended default -- see .env.example -- alongside the
+    other providers, not replacing them in code. Locks in registration
+    and that resolve() degrades to the offline heuristic the same way
+    every other provider already does on a provider error, rather than
+    raising. Stubs the provider call itself instead of hitting the real
+    network with no credentials (slow and flaky in a test suite)."""
+    assert "groq" in llm_resolver._PROVIDERS
+
+    def _boom(case, candidates):
+        raise RuntimeError("simulated groq failure, e.g. missing GROQ_API_KEY")
+    monkeypatch.setitem(llm_resolver._PROVIDERS, "groq", _boom)
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+
+    case = {"order_id": "ORD1", "settlement_id": "stl1", "expected_utr": "UTR123456789",
+             "expected_amount": 1000.0, "customer": "Test User"}
+    candidates = [{"line_id": "bl1", "amount": 1000.0, "value_date": "2026-08-05",
+                    "narration": "NEFT/12345.../CUST TXN"}]
+    verdict = llm_resolver.resolve(case, candidates)
+    assert verdict is not None
+    assert "groq call failed" in verdict["reasoning"]
+
+
 def test_heuristic_resolver_matches_garbled_utr_by_amount_and_similarity():
     case = {"order_id": "ORD1", "settlement_id": "stl1", "expected_utr": "UTR123456789",
              "expected_amount": 1000.0, "customer": "Test User"}

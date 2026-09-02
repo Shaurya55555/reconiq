@@ -113,6 +113,33 @@ def _call_anthropic(case, candidates) -> dict | None:
     return json.loads(match.group(0)) if match else None
 
 
+def _call_groq(case, candidates) -> dict | None:
+    """Groq serves open-weight models (Llama 3.x etc.) behind an
+    OpenAI-compatible API, so this reuses the openai SDK already a
+    dependency for _call_openai rather than adding a new one -- just
+    pointed at Groq's base_url with a Groq key. Chosen as the default
+    live provider over Gemini for two concrete reasons found during
+    testing: Groq's free-tier rate limit is well above Gemini's
+    15 requests/minute (a real risk of degrading every LLM call to the
+    offline heuristic under a judge's live run), and Groq's inference is
+    fast enough that more of a batch's deferred cases finish within
+    matcher.LLM_BATCH_TIME_BUDGET_SECONDS instead of timing out.
+    """
+    from openai import OpenAI
+    client = OpenAI(api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1",
+                     timeout=PROVIDER_CALL_TIMEOUT_SECONDS)
+    resp = client.chat.completions.create(
+        model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": _build_user_prompt(case, candidates)},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0,
+    )
+    return json.loads(resp.choices[0].message.content)
+
+
 def _call_gemini(case, candidates) -> dict | None:
     from google import genai
     client = genai.Client(
@@ -147,6 +174,7 @@ _PROVIDERS = {
     "openai": _call_openai,
     "anthropic": _call_anthropic,
     "gemini": _call_gemini,
+    "groq": _call_groq,
     "ollama": _call_ollama,
 }
 
@@ -310,6 +338,16 @@ def answer_question(question: str, summary: dict, exceptions: list[dict],
                 contents=QA_SYSTEM_PROMPT + "\n\n" + context,
             )
             return resp.text
+        if provider == "groq":
+            from openai import OpenAI
+            client = OpenAI(api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1")
+            resp = client.chat.completions.create(
+                model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
+                messages=[{"role": "system", "content": QA_SYSTEM_PROMPT},
+                          {"role": "user", "content": context}],
+                temperature=0,
+            )
+            return resp.choices[0].message.content
         if provider == "ollama":
             import httpx
             resp = httpx.post(
