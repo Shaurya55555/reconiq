@@ -54,15 +54,21 @@ gate, and leaves genuine uncertainty as an honest, reason-coded exception.
    must never make an already-legitimate full settlement look like an
    `amount_mismatch`. Computed per settlement candidate, not once per
    order, so this is correct even with multiple candidate settlements.
-5. **LLM-resolved match** — only when the UTR isn't found in *any* bank
+5. **Cash-position matching** — a refund record proves money was
+   promised back, not that it left the account. Every refund is also
+   matched against its own outbound (negative-amount) bank debit line;
+   one with no matching debit becomes an honest `refund_not_debited`
+   exception carrying its own amount, counted toward amount at risk and
+   the closing verdict instead of being assumed to have gone out.
+6. **LLM-resolved match** — only when the UTR isn't found in *any* bank
    line at all (garbled/truncated narration). A real Gemini call
    reasons over the free text and returns a confidence score; an
    offline heuristic fallback covers both the no-API-key case and any
    live-call failure (rate limit, timeout) — gracefully, never a crash.
-6. **Confidence gate** — an LLM verdict only auto-clears if its
+7. **Confidence gate** — an LLM verdict only auto-clears if its
    confidence is at or above a tunable threshold. Below it, the case
    becomes an honest exception instead of a guess.
-7. **Honest exceptions** — anything still unresolved gets a specific
+8. **Honest exceptions** — anything still unresolved gets a specific
    reason code, never dropped silently.
 
 ---
@@ -206,7 +212,7 @@ empirical basis for the default, not an assertion.
 
 ## Proof it works
 
-- **71/71 automated tests passing**, including dedicated adversarial
+- **77/77 automated tests passing**, including dedicated adversarial
   tests: group-split/batch-settlement matching never falsely combines
   unrelated bank lines or rescues a genuine amount mismatch; a refund
   only ever explains the gap it actually accounts for and never masks
