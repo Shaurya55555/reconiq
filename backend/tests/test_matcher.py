@@ -217,6 +217,39 @@ def test_date_drift_tolerance_changes_classification_not_amount_mismatch_outcome
         "a tightened date tolerance must never rescue a genuine amount mismatch into a match"
 
 
+def test_identical_amount_within_date_window_never_cross_matches_a_different_utr():
+    """Regression guard for a class of bug that would exist in a naive
+    amount+date matcher but must not exist here: matching is always
+    UTR-anchored first (_find_settlement_match only ever considers bank
+    lines whose narration already contains *that* settlement's own UTR,
+    see reconcile()'s `utr_matches` filter) -- amount and date are only
+    compared within that pre-filtered set, never across the whole bank
+    line pool. Two orders settled for the identical amount within the
+    date-drift window, but under two different UTRs, must resolve to
+    their own bank line each, never swapped or cross-matched, no matter
+    how loose date_drift_ok_days is."""
+    order_a = {"order_id": "ORDA", "customer": "A", "amount": 5000.0,
+               "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_a"}
+    order_b = {"order_id": "ORDB", "customer": "B", "amount": 5000.0,
+               "created_at": "2026-08-02T00:00:00", "razorpay_payment_id": "pay_b"}
+    settlement_a = {"settlement_id": "stlA", "payment_id": "pay_a", "utr": "UTR_AAA111",
+                     "amount": 5000.0, "settled_at": "2026-08-03"}
+    settlement_b = {"settlement_id": "stlB", "payment_id": "pay_b", "utr": "UTR_BBB222",
+                     "amount": 5000.0, "settled_at": "2026-08-03"}
+    bank_line_a = {"line_id": "blA", "narration": "NEFT-UTR_AAA111-RAZORPAY SETTLEMENT",
+                    "amount": 5000.0, "value_date": "2026-08-03"}
+    bank_line_b = {"line_id": "blB", "narration": "NEFT-UTR_BBB222-RAZORPAY SETTLEMENT",
+                    "amount": 5000.0, "value_date": "2026-08-03"}
+
+    result = matcher.reconcile([order_a, order_b], [settlement_a, settlement_b],
+                                [bank_line_a, bank_line_b], date_drift_ok_days=365)
+
+    assert not result["exceptions"]
+    matches_by_order = {m["order_id"]: m for m in result["matches"]}
+    assert matches_by_order["ORDA"]["bank_line_id"] == "blA"
+    assert matches_by_order["ORDB"]["bank_line_id"] == "blB"
+
+
 def test_money_weighted_accuracy_distinguishes_false_clears_from_safe_misses():
     orders = [
         {"order_id": "ORD_CLEAN_BIG", "amount": 100000.0, "_truth": "clean"},
