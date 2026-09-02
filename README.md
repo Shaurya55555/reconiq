@@ -94,12 +94,17 @@ ReconIQ closes that loop automatically on a batch of orders:
    The exact numeric values a preset maps to stay visible and editable in
    an "Advanced" panel, never hidden, so a technical reviewer (or a judge)
    can always see precisely what a preset means and override it.
-10. **Refund-aware matching.** A full refund correctly resolves with no
-    settlement expected (`method: "refunded"`); a partial refund is
-    matched against `order.amount - refund.amount`, not the raw order
-    amount, so it's never misfiled as a fee mismatch. Refunded money is
-    tracked and shown separately, never counted as reconciled settlement
-    money. See "Refund-aware reconciliation" below for the full detail.
+10. **Refund-aware matching, and cash position.** A full refund correctly
+    resolves with no settlement expected (`method: "refunded"`); a
+    partial refund is matched against `order.amount - refund.amount`,
+    not the raw order amount, so it's never misfiled as a fee mismatch.
+    Refunded money is tracked and shown separately, never counted as
+    reconciled settlement money — and never assumed to have actually
+    left the bank just because a refund record exists: each refund is
+    also matched against its own outbound bank debit line, and one
+    without a matching debit is an honest exception, counted toward
+    amount at risk. See "Refund-aware reconciliation" and "Cash
+    position" below for the full detail.
 
 ## Beyond 1:1 matching, in more depth
 
@@ -561,11 +566,8 @@ behaves:
   was refunded ₹X afterward — tracked as a separate event, not netted
   against this settlement."* The evidence drawer shows the same
   distinction (a "Post-settlement refund" row, separate from "Net of
-  pre-settlement refund"). Deliberately *not* full double-entry
-  bookkeeping: the post-settlement refund is reported and explicitly
-  called out, not matched against its own outbound bank debit line —
-  there's no bank-line data for outbound refund transactions in the
-  current schema, so that's the honest limit of what's built here.
+  pre-settlement refund"). A post-settlement refund is also matched
+  against its own outbound bank debit line — see "Cash position" below.
 - A refund only ever explains the gap it actually accounts for —
   `test_refund_does_not_mask_a_genuine_amount_mismatch` locks in that a
   refund can't paper over an unrelated, genuine discrepancy.
@@ -576,6 +578,26 @@ behaves:
   doing.
 - Works for uploaded data too via an optional `refunds.csv`
   (`payment_id`, `amount`) alongside the three required files.
+
+**Cash position — does a refund's money actually leave the account?** A
+refund record proves money was *promised* back to a customer, not that it
+left the bank. `matcher._match_refund_debits` looks for an outbound
+(negative-amount) bank line referencing the refund, the same "does the
+bank confirm this" standard settlement matching already applies to
+inbound money. A refund with no matching debit becomes an honest
+`refund_not_debited` exception carrying its own amount (so it counts
+toward `total_amount_at_risk` and the closing verdict, not silently
+assumed to have gone out). The synthetic generator models this
+realistically — most refunds get a matching debit line a day or two
+later, but `data_gen.REFUND_DEBIT_RATE` (0.82) deliberately leaves some
+undebited, so a real run always has both outcomes to show, not just a
+hypothetical case. The dashboard's Financial Position cards report
+`total_refund_amount_debited` / `total_refund_amount_undebited`
+separately. Works for uploaded data too: a settlement's `payment_ids`
+column has a CSV counterpart (see above); a refund's debit-matching
+reference is `refund_id` if the uploaded `refunds.csv` has that optional
+column, falling back to a `payment_id`+`amount` composite key when it
+doesn't.
 
 **11. Empirical confidence-threshold calibration.** `LLM_CONFIDENCE_THRESHOLD`
 (default `0.6`) was always a reasonable starting point, not an

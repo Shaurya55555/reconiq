@@ -504,10 +504,13 @@ def test_full_refund_resolves_without_settlement_and_without_exception():
              "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
     refund = {"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 1000.0,
               "refunded_at": "2026-08-02T00:00:00", "type": "full"}
-    result = matcher.reconcile([order], [], [], refunds=[refund])
+    refund_debit = [{"line_id": "bl_refund1", "narration": "REFUND-rfnd1-RAZORPAY PAYOUT",
+                      "amount": -1000.0, "value_date": "2026-08-02"}]
+    result = matcher.reconcile([order], [], refund_debit, refunds=[refund])
     assert not result["exceptions"]
     assert len(result["matches"]) == 1
     assert result["matches"][0]["method"] == "refunded"
+    assert len(result["refund_matches"]) == 1
 
 
 def test_partial_refund_matches_against_net_of_refund_amount():
@@ -522,7 +525,9 @@ def test_partial_refund_matches_against_net_of_refund_amount():
     settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
                   "amount": 600.0, "settled_at": "2026-08-02"}
     bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT",
-                   "amount": 600.0, "value_date": "2026-08-02"}]
+                   "amount": 600.0, "value_date": "2026-08-02"},
+                  {"line_id": "bl_refund1", "narration": "REFUND-rfnd1-RAZORPAY PAYOUT",
+                   "amount": -400.0, "value_date": "2026-08-02"}]
     result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])
     assert not result["exceptions"]
     assert len(result["matches"]) == 1
@@ -698,7 +703,9 @@ def test_refund_after_settlement_does_not_shrink_a_legitimate_settlement():
     settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
                   "amount": 1000.0, "settled_at": "2026-08-02"}
     bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT",
-                   "amount": 1000.0, "value_date": "2026-08-02"}]
+                   "amount": 1000.0, "value_date": "2026-08-02"},
+                  {"line_id": "bl_refund1", "narration": "REFUND-rfnd1-RAZORPAY PAYOUT",
+                   "amount": -1000.0, "value_date": "2026-08-07"}]
     refund = {"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 1000.0,
               "refunded_at": "2026-08-06", "type": "full"}  # 4 days AFTER settled_at
 
@@ -722,7 +729,9 @@ def test_refund_before_settlement_still_nets_as_before():
     settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
                   "amount": 600.0, "settled_at": "2026-08-02"}
     bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT",
-                   "amount": 600.0, "value_date": "2026-08-02"}]
+                   "amount": 600.0, "value_date": "2026-08-02"},
+                  {"line_id": "bl_refund1", "narration": "REFUND-rfnd1-RAZORPAY PAYOUT",
+                   "amount": -400.0, "value_date": "2026-08-01"}]
 
     result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])
     assert not result["exceptions"]
@@ -741,11 +750,85 @@ def test_refund_exactly_on_settlement_date_counts_as_pre_settlement():
     settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
                   "amount": 600.0, "settled_at": "2026-08-02"}
     bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT",
-                   "amount": 600.0, "value_date": "2026-08-02"}]
+                   "amount": 600.0, "value_date": "2026-08-02"},
+                  {"line_id": "bl_refund1", "narration": "REFUND-rfnd1-RAZORPAY PAYOUT",
+                   "amount": -400.0, "value_date": "2026-08-02"}]
 
     result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])
     assert not result["exceptions"]
     assert len(result["matches"]) == 1
+
+
+# ---- cash position: does a refund's money actually leave the bank? ----
+
+def test_refund_without_matching_bank_debit_surfaces_as_an_honest_exception():
+    """A refund record proves money was promised back, not that it left the
+    account. With no outbound bank line at all, this must not be silently
+    assumed to have gone out -- it's a genuine cash-position risk."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    refund = {"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 1000.0,
+              "refunded_at": "2026-08-02T00:00:00", "type": "full"}
+
+    result = matcher.reconcile([order], [], [], refunds=[refund])
+    assert result["refund_matches"] == []
+    undebited = [e for e in result["exceptions"] if e["type"] == "refund_not_debited"]
+    assert len(undebited) == 1
+    assert undebited[0]["amount"] == 1000.0
+    assert undebited[0]["refund_id"] == "rfnd1"
+
+
+def test_refund_debit_match_removes_the_bank_line_from_the_unmatched_pool():
+    """A matched refund debit line must not also surface as an
+    unrecognized_bank_line -- it's accounted for, just on the outbound
+    side of the ledger, not the inbound settlement side."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    refund = {"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 1000.0,
+              "refunded_at": "2026-08-02T00:00:00", "type": "full"}
+    refund_debit = [{"line_id": "bl_refund1", "narration": "REFUND-rfnd1-RAZORPAY PAYOUT",
+                      "amount": -1000.0, "value_date": "2026-08-02"}]
+
+    result = matcher.reconcile([order], [], refund_debit, refunds=[refund])
+    assert result["unmatched_bank_lines"] == []
+    assert len(result["refund_matches"]) == 1
+    assert result["refund_matches"][0]["bank_line_id"] == "bl_refund1"
+
+
+def test_summarize_reports_cash_position_split_between_debited_and_undebited_refunds():
+    orders = [{"order_id": "ORD1", "customer": "A", "amount": 1000.0,
+               "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"},
+              {"order_id": "ORD2", "customer": "B", "amount": 500.0,
+               "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_2"}]
+    refunds = [{"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 1000.0,
+                "refunded_at": "2026-08-02T00:00:00", "type": "full"},
+               {"refund_id": "rfnd2", "payment_id": "pay_2", "amount": 500.0,
+                "refunded_at": "2026-08-02T00:00:00", "type": "full"}]
+    bank_lines = [{"line_id": "bl_refund1", "narration": "REFUND-rfnd1-RAZORPAY PAYOUT",
+                   "amount": -1000.0, "value_date": "2026-08-02"}]  # rfnd2 deliberately undebited
+
+    result = matcher.reconcile(orders, [], bank_lines, refunds=refunds)
+    summary = matcher.summarize(orders, result, refunds=refunds, refund_matches=result["refund_matches"])
+    assert summary["refund_count"] == 2
+    assert summary["total_refund_amount_debited"] == 1000.0
+    assert summary["total_refund_amount_undebited"] == 500.0
+    # the undebited refund's amount must count toward at-risk cash
+    assert summary["total_amount_at_risk"] >= 500.0
+
+
+def test_data_gen_batch_produces_a_realistic_mix_of_debited_and_undebited_refunds():
+    """Regression guard for the synthetic generator: a real batch must
+    contain both outcomes (not every refund debited, not every refund
+    stuck), otherwise the cash-position pass would only ever be exercised
+    by hand-built unit tests, never by an actual demo run."""
+    batch = data_gen.generate_batch(n_orders=400, seed=1)
+    result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                refunds=batch["refunds"])
+    undebited = [e for e in result["exceptions"] if e["type"] == "refund_not_debited"]
+    assert batch["refunds"], "expected at least one refund at this seed/scale"
+    assert len(result["refund_matches"]) > 0
+    assert len(undebited) > 0
+    assert len(result["refund_matches"]) + len(undebited) == len(batch["refunds"])
 
 
 def test_generated_refunded_after_settlement_orders_resolve_as_matched():

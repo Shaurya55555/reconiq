@@ -78,6 +78,26 @@ def test_override_endpoint_rejects_a_shaky_match_and_updates_summary():
     assert body["summary"]["matched"] == run["summary"]["matched"] - 1
 
 
+def test_run_endpoint_includes_cash_position_fields_and_refund_matches():
+    """End-to-end check that the cash-position pass (matcher._match_refund_debits)
+    is actually wired into /api/run: refund_matches in the response, and
+    the summary's total_refund_amount_debited/undebited must account for
+    every seeded refund, not just the ones that happened to settle
+    cleanly."""
+    res = client.post("/api/run", json={"n_orders": 400, "seed": 1})
+    assert res.status_code == 200
+    body = res.json()
+    assert "refund_matches" in body
+    assert body["refund_matches"], "expected at least one refund debit match at this seed/scale"
+
+    s = body["summary"]
+    for key in ("refund_count", "total_refund_amount_debited", "total_refund_amount_undebited"):
+        assert key in s
+    assert s["refund_count"] == len(body["refunds"])
+    assert round(s["total_refund_amount_debited"] + s["total_refund_amount_undebited"], 2) == \
+           round(sum(r["amount"] for r in body["refunds"]), 2)
+
+
 def test_run_endpoint_includes_rules_only_counterfactual():
     run = client.post("/api/run", json={"n_orders": 100, "seed": 5}).json()
     rules_only = run["rules_only_summary"]

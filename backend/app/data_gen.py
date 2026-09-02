@@ -238,9 +238,37 @@ def generate_batch(n_orders: int = 70, seed: int | None = None,
             })
 
     _generate_batch_settlements(orders, settlements, bank_lines, rng)
+    _generate_refund_debits(refunds, bank_lines, rng)
 
     rng.shuffle(bank_lines)
     return {"orders": orders, "settlements": settlements, "bank_lines": bank_lines, "refunds": refunds}
+
+
+REFUND_DEBIT_RATE = 0.82  # not every refund clears the bank promptly -- some are still
+                          # pending or genuinely stuck, which is exactly the risk
+                          # cash-position matching (matcher._match_refund_debits) exists
+                          # to catch instead of assuming a refund record means money moved
+
+
+def _generate_refund_debits(refunds: list[dict], bank_lines: list[dict], rng: random.Random) -> None:
+    """A refund record is a promise, not proof the money left the account.
+    Model that gap directly: most refunds get a matching outbound
+    (negative-amount) bank line a day or two later, referencing the
+    refund_id the same way a settlement's bank line references its UTR --
+    but some fraction deliberately don't, so a real batch always has at
+    least one genuinely undebited refund for the cash-position pass to
+    surface, not just a hypothetical case."""
+    for r in refunds:
+        if rng.random() >= REFUND_DEBIT_RATE:
+            continue
+        refunded_at = datetime.fromisoformat(r["refunded_at"])
+        debit_date = refunded_at + timedelta(days=rng.randint(0, 2))
+        bank_lines.append({
+            "line_id": f"bl_{rng.randint(10**9, 10**10 - 1)}",
+            "narration": f"REFUND-{r['refund_id']}-RAZORPAY PAYOUT",
+            "amount": -r["amount"],
+            "value_date": debit_date.date().isoformat(),
+        })
 
 
 def _generate_batch_settlements(orders: list[dict], settlements: list[dict],

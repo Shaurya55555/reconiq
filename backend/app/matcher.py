@@ -103,6 +103,60 @@ def _find_settlement_match(stl: dict, order: dict, utr_matches: list[dict],
     return None
 
 
+def _refund_key(r: dict) -> str:
+    """refund_id is always present for synthetic data but is an optional
+    upload column (see REQUIRED_REFUND_FIELDS in main.py, kept backward
+    compatible with the existing payment_id/amount-only refunds.csv
+    schema) -- fall back to a payment_id+amount composite so uploaded
+    refunds without it still get a stable, matchable key instead of a
+    KeyError.
+    """
+    return r.get("refund_id") or f"{r['payment_id']}_{r['amount']}"
+
+
+def _match_refund_debits(refunds: list[dict], unmatched_bank: dict[str, dict],
+                          log) -> tuple[list[dict], list[dict]]:
+    """A refund record proves money was *promised* back to a customer, not
+    that it actually left the account -- those are two different facts,
+    and a books-closing decision needs the second one, not just the
+    first. This looks for an outbound (negative-amount) bank line whose
+    narration references the refund and whose magnitude matches, exactly
+    the same "does the bank confirm this" standard settlement matching
+    already applies to inbound money. A refund with no matching debit is
+    a real cash-position risk (pending payout, or a genuine error) and is
+    surfaced as an honest exception with the refund's own amount, not
+    silently assumed to have gone out.
+    """
+    matches, exceptions = [], []
+    for r in refunds:
+        key = _refund_key(r)
+        hit = next((b for b in unmatched_bank.values()
+                    if b["amount"] < 0 and abs(-b["amount"] - r["amount"]) < 0.01
+                    and key in b["narration"]), None)
+        if hit:
+            unmatched_bank.pop(hit["line_id"], None)
+            matches.append({
+                "refund_id": key, "payment_id": r["payment_id"],
+                "bank_line_id": hit["line_id"], "amount": r["amount"],
+                "method": "refund_debit_matched",
+                "note": f"Refund confirmed debited from the bank on {hit['value_date']}.",
+            })
+            log("refund_debit_match", "matched", "rule", 1.0,
+                f"Refund {key} (Rs {r['amount']:,.2f}) confirmed debited from the bank.",
+                refund_id=key)
+        else:
+            exceptions.append({
+                "type": "refund_not_debited", "refund_id": key,
+                "payment_id": r["payment_id"], "amount": r["amount"],
+                "reason": f"Refund {key} for Rs {r['amount']:,.2f} is recorded but no "
+                          "matching outbound bank debit was found -- the money may not have "
+                          "actually left the account yet.",
+            })
+            log("refund_debit_match", "exception", "rule", 0.0,
+                f"No outbound bank debit found for refund {key}.", refund_id=key)
+    return matches, exceptions
+
+
 def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict],
               fee_tolerance_pct: float = FEE_TOLERANCE_PCT,
               date_drift_ok_days: int = DATE_DRIFT_OK_DAYS,
@@ -312,12 +366,16 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
                     log("dedupe", "exception", "rule", 0.8,
                         "unresolved duplicate settlement", order_id=order["order_id"])
 
+    refund_matches, refund_exceptions = _match_refund_debits(refunds or [], unmatched_bank, log)
+    exceptions.extend(refund_exceptions)
+
     return {
         "matches": matches,
         "exceptions": exceptions,
         "audit_trail": audit,
         "needs_llm": needs_llm,
         "unmatched_bank_lines": list(unmatched_bank.values()),
+        "refund_matches": refund_matches,
     }
 
 
@@ -437,7 +495,8 @@ def apply_confidence_threshold(rule_result: dict, case_verdicts: list[tuple[dict
             "bank_line_id": bank_line_id,
         })
 
-    return {"matches": matches, "exceptions": exceptions, "audit_trail": audit}
+    return {"matches": matches, "exceptions": exceptions, "audit_trail": audit,
+            "refund_matches": rule_result.get("refund_matches", [])}
 
 
 VALID_OVERRIDE_ACTIONS = {"accept_match", "reject_match", "manual_match"}
@@ -502,7 +561,8 @@ def apply_override(matches: list[dict], exceptions: list[dict], audit_trail: lis
     return {"matches": matches, "exceptions": exceptions, "audit_trail": audit_trail}
 
 
-def summarize(orders: list[dict], result: dict, refunds: list[dict] | None = None) -> dict:
+def summarize(orders: list[dict], result: dict, refunds: list[dict] | None = None,
+              refund_matches: list[dict] | None = None) -> dict:
     total = len(orders)
     matched = len(result["matches"])
     by_method = {}
@@ -550,6 +610,16 @@ def summarize(orders: list[dict], result: dict, refunds: list[dict] | None = Non
         sum(amount_by_order_id.get(oid, 0.0) for oid in excepted_order_ids)
         + sum(e.get("amount", 0.0) for e in result["exceptions"] if not e.get("order_id")), 2)
 
+    # Cash position: a refund record proves money was promised back, not
+    # that it left the account -- these three numbers separate "refunded
+    # on paper" from "confirmed out the door" so a controller isn't
+    # closing the books on an assumption. See _match_refund_debits.
+    debited_refund_keys = {m["refund_id"] for m in (refund_matches or [])}
+    total_refund_amount_debited = round(
+        sum(r["amount"] for r in (refunds or []) if _refund_key(r) in debited_refund_keys), 2)
+    total_refund_amount_undebited = round(
+        sum(r["amount"] for r in (refunds or []) if _refund_key(r) not in debited_refund_keys), 2)
+
     return {
         "total_orders": total,
         "matched": matched,
@@ -559,6 +629,9 @@ def summarize(orders: list[dict], result: dict, refunds: list[dict] | None = Non
         "total_amount_matched": total_amount_matched,
         "total_amount_at_risk": total_amount_at_risk,
         "total_amount_refunded": total_amount_refunded,
+        "refund_count": len(refunds or []),
+        "total_refund_amount_debited": total_refund_amount_debited,
+        "total_refund_amount_undebited": total_refund_amount_undebited,
     }
 
 

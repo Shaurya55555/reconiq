@@ -190,7 +190,8 @@ def run_reconciliation(req: RunRequest):
     # the "why does the LLM exist" comparison is apples-to-apples, not a
     # separate cherry-picked run.
     rules_only = matcher.apply_llm_resolutions(rule_result, llm_resolve_fn=None, confidence_threshold=threshold)
-    rules_only_summary = matcher.summarize(batch["orders"], rules_only, refunds=batch["refunds"])
+    rules_only_summary = matcher.summarize(batch["orders"], rules_only, refunds=batch["refunds"],
+                                            refund_matches=rules_only.get("refund_matches"))
     rules_only_ground_truth = scoring.score_against_ground_truth(batch["orders"], rules_only)
     _apply_ground_truth_to_summary(rules_only_summary, rules_only_ground_truth)
 
@@ -199,7 +200,8 @@ def run_reconciliation(req: RunRequest):
     llm_elapsed = time.perf_counter() - t_llm
     elapsed = time.perf_counter() - t0
 
-    summary = matcher.summarize(batch["orders"], final, refunds=batch["refunds"])
+    summary = matcher.summarize(batch["orders"], final, refunds=batch["refunds"],
+                                 refund_matches=final.get("refund_matches"))
     summary["throughput_records_per_sec"] = round(req.n_orders / elapsed, 1) if elapsed > 0 else None
     summary["elapsed_seconds"] = round(elapsed, 3)
     summary["llm_elapsed_seconds"] = round(llm_elapsed, 3)
@@ -228,6 +230,7 @@ def run_reconciliation(req: RunRequest):
         "audit_trail": final["audit_trail"],
         "ground_truth": ground_truth,
         "rules_only_summary": rules_only_summary,
+        "refund_matches": final.get("refund_matches", []),
     }
 
 
@@ -367,7 +370,7 @@ def run_uploaded_data(req: UploadRunRequest):
     llm_elapsed = time.perf_counter() - t_llm
     elapsed = time.perf_counter() - t0
 
-    summary = matcher.summarize(orders, final, refunds=refunds)
+    summary = matcher.summarize(orders, final, refunds=refunds, refund_matches=final.get("refund_matches"))
     summary["throughput_records_per_sec"] = round(len(orders) / elapsed, 1) if elapsed > 0 else None
     summary["elapsed_seconds"] = round(elapsed, 3)
     summary["llm_elapsed_seconds"] = round(llm_elapsed, 3)
@@ -388,6 +391,7 @@ def run_uploaded_data(req: UploadRunRequest):
         "exceptions": classified_exceptions,
         "verdict": verdict,
         "audit_trail": final["audit_trail"],
+        "refund_matches": final.get("refund_matches", []),
     }
 
 

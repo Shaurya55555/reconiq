@@ -372,7 +372,9 @@
           (optional payment_ids column: a quoted, comma-separated list of payment IDs
           for one settlement row that covers more than one payment).
           bank_lines: line_id, narration, amount, value_date.
-          refunds (optional): payment_id, amount.
+          refunds (optional): payment_id, amount (add refund_id for reliable outbound
+          cash-position matching against a refund's bank debit line -- without it,
+          matching falls back to a payment_id+amount key).
           No ground-truth accuracy is shown for your own data (no seeded truth label to score against) &mdash;
           match rate, amount at risk, and the exception list still are.
         </p>
@@ -406,6 +408,8 @@
     <div class="card big"><div class="label" title="Money confirmed as correctly matched across all three sources">Amount reconciled</div><div class="value good" id="c-amount-matched">--</div></div>
     <div class="card big"><div class="label" title="Money linked to transactions that still need review before this batch can close">Amount at risk</div><div class="value" id="c-amount-at-risk">--</div></div>
     <div class="card big" id="amount-refunded-card" style="display:none"><div class="label" title="Money returned to customers via full or partial refunds -- correctly resolved, but never counted as reconciled settlement money">Amount refunded</div><div class="value" id="c-amount-refunded">--</div></div>
+    <div class="card big" id="refund-debited-card" style="display:none"><div class="label" title="Of the money refunded, this much is confirmed by a matching outbound bank debit -- the refund record and the actual cash movement agree">Refunds confirmed debited</div><div class="value good" id="c-refund-debited">--</div></div>
+    <div class="card big" id="refund-undebited-card" style="display:none"><div class="label" title="Refund records with no matching outbound bank debit found yet -- money promised back to a customer that hasn't been confirmed as having actually left the account. Counted in Amount at risk.">Refunds not yet debited</div><div class="value warn" id="c-refund-undebited">--</div></div>
     <div class="card big" id="value-accuracy-card" style="display:none"><div class="label" title="Order-level correctness, weighted by rupee amount -- not a claim that money was physically verified moving">Value-weighted accuracy</div><div class="value" id="c-amount-accuracy">--</div></div>
   </div>
 
@@ -1022,6 +1026,16 @@ function renderSummary(s) {
       $("amount-refunded-card").style.display = "";
     } else {
       $("amount-refunded-card").style.display = "none";
+    }
+    if (typeof s.refund_count === "number" && s.refund_count > 0) {
+      $("c-refund-debited").textContent = rupees(s.total_refund_amount_debited);
+      $("refund-debited-card").style.display = "";
+      $("c-refund-undebited").textContent = rupees(s.total_refund_amount_undebited);
+      $("c-refund-undebited").className = "value " + (s.total_refund_amount_undebited === 0 ? "good" : "warn");
+      $("refund-undebited-card").style.display = "";
+    } else {
+      $("refund-debited-card").style.display = "none";
+      $("refund-undebited-card").style.display = "none";
     }
     $("amount-cards").style.display = "";
   }
