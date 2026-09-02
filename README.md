@@ -308,12 +308,12 @@ fallback — the app is fully functional and the reasoning is real, just
 weaker — but it should never be presented as "the LLM reasoning" in a
 demo unless a provider key is actually configured. **The live deployment
 is configured with a provider** (`LLM_PROVIDER=groq`,
-`llama-3.3-70b-versatile` — switched from Gemini after Gemini's
-15 req/min free-tier limit was hit during testing; see `.env.example`) —
-the exception resolution and chat answers you get from the hosted demo
-are genuine model calls, verified against the live API, not the
-heuristic. The heuristic path stays as a real, tested fallback for
-offline/no-key use, and both are covered above.
+`openai/gpt-oss-20b` — switched from Gemini after Gemini's 15 req/min
+free-tier limit was hit during testing; see `.env.example`) — the
+exception resolution and chat answers you get from the hosted demo are
+genuine model calls, verified against the live API, not the heuristic.
+The heuristic path stays as a real, tested fallback for offline/no-key
+use, and both are covered above.
 
 ## Per-decision evidence
 

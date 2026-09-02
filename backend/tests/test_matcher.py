@@ -753,6 +753,38 @@ def test_resolve_llm_verdicts_runs_deferred_cases_concurrently_not_sequentially(
         assert verdict["reasoning"] == "fake resolved"
 
 
+def test_narrow_llm_candidates_drops_wildly_different_amounts_but_never_the_right_one():
+    """Regression guard for the Groq TPM-limit fix: candidates outside a
+    generous amount window must be dropped (this is what actually shrinks
+    the prompt), but the correct bank line -- whatever its amount -- must
+    never be excluded when it's within that window, and the function must
+    never return an empty list when a same-amount candidate exists."""
+    case = {"expected_amount": 1000.0}
+    candidates = [
+        {"line_id": "bl_match", "amount": 1000.0},
+        {"line_id": "bl_close", "amount": 1020.0},   # within 5% tolerance
+        {"line_id": "bl_far1", "amount": 50.0},
+        {"line_id": "bl_far2", "amount": 24999.0},
+    ]
+    narrowed = matcher._narrow_llm_candidates(case, candidates)
+    narrowed_ids = {c["line_id"] for c in narrowed}
+    assert "bl_match" in narrowed_ids
+    assert "bl_close" in narrowed_ids
+    assert "bl_far1" not in narrowed_ids
+    assert "bl_far2" not in narrowed_ids
+    assert len(narrowed) < len(candidates)
+
+
+def test_narrow_llm_candidates_falls_back_to_full_list_when_window_is_empty():
+    """If nothing is within the amount window (e.g. an unusually large fee
+    adjustment), narrowing must never leave the LLM with zero candidates
+    -- fall back to the full pool rather than guarantee a miss."""
+    case = {"expected_amount": 1000.0}
+    candidates = [{"line_id": "bl_far", "amount": 50.0}]
+    narrowed = matcher._narrow_llm_candidates(case, candidates)
+    assert narrowed == candidates
+
+
 # ---- "Ask about this run" -- order lookup must cover matched orders too ----
 
 def test_heuristic_answer_finds_a_matched_order_by_id():

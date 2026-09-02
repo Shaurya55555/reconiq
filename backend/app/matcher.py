@@ -387,6 +387,24 @@ LLM_MAX_CONCURRENCY = 5  # bounded, so a large batch can't open dozens of concur
                          # connections to the LLM provider at once
 
 
+def _narrow_llm_candidates(case: dict, candidates: list[dict], tolerance_pct: float = 0.05) -> list[dict]:
+    """Every LLM call used to send the full remaining bank-line pool as
+    candidates, most of which have a wildly different amount and could
+    never plausibly be this case's match -- needlessly large prompts that
+    burn through a provider's tokens-per-minute budget fast (hit in
+    practice: Groq's free tier caps out around 6000-8000 TPM regardless
+    of model, and a 33-candidate prompt alone can eat that in about 4
+    calls, well under what a real batch needs). Narrows each case's
+    candidates to bank lines within a generous amount window first, and
+    falls back to the full list only if that window is empty, so a
+    legitimate match outside it (an unusually large fee/adjustment) is
+    never silently excluded -- this trades prompt size, not correctness.
+    """
+    expected = case["expected_amount"]
+    narrow = [c for c in candidates if abs(c["amount"] - expected) <= expected * tolerance_pct]
+    return narrow or candidates
+
+
 def resolve_llm_verdicts(rule_result: dict, llm_resolve_fn,
                           time_budget_seconds: float = LLM_BATCH_TIME_BUDGET_SECONDS
                           ) -> list[tuple[dict, dict | None]]:
@@ -427,7 +445,8 @@ def resolve_llm_verdicts(rule_result: dict, llm_resolve_fn,
     candidates = list({b["line_id"]: b for b in rule_result["unmatched_bank_lines"]}.values())
 
     pool = ThreadPoolExecutor(max_workers=LLM_MAX_CONCURRENCY)
-    future_to_case = {pool.submit(llm_resolve_fn, case, candidates): case for case in cases}
+    future_to_case = {pool.submit(llm_resolve_fn, case, _narrow_llm_candidates(case, candidates)): case
+                       for case in cases}
     verdict_by_order_id: dict[str, dict | None] = {}
     try:
         for future in as_completed(future_to_case, timeout=max(time_budget_seconds, 0)):

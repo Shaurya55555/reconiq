@@ -86,7 +86,14 @@ PROVIDER_CALL_TIMEOUT_SECONDS = 10.0
 
 def _call_openai(case, candidates) -> dict | None:
     from openai import OpenAI
-    client = OpenAI(timeout=PROVIDER_CALL_TIMEOUT_SECONDS)
+    # max_retries=0: the SDK's default (2, with backoff) can silently
+    # retry a 429 for many seconds past matcher.LLM_BATCH_TIME_BUDGET_SECONDS
+    # before ever raising -- found in practice against Groq (also
+    # OpenAI-compatible, see _call_groq): the request just never surfaces
+    # as done or failed within our own budget, so our own fallback never
+    # gets a chance to run. One try, then straight to resolve()'s except
+    # block, which already has a real fallback (the offline heuristic).
+    client = OpenAI(timeout=PROVIDER_CALL_TIMEOUT_SECONDS, max_retries=0)
     resp = client.chat.completions.create(
         model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
         messages=[
@@ -101,7 +108,7 @@ def _call_openai(case, candidates) -> dict | None:
 
 def _call_anthropic(case, candidates) -> dict | None:
     import anthropic
-    client = anthropic.Anthropic(timeout=PROVIDER_CALL_TIMEOUT_SECONDS)
+    client = anthropic.Anthropic(timeout=PROVIDER_CALL_TIMEOUT_SECONDS, max_retries=0)
     resp = client.messages.create(
         model=os.getenv("LLM_MODEL", "claude-haiku-4-5-20251001"),
         max_tokens=300,
@@ -114,22 +121,31 @@ def _call_anthropic(case, candidates) -> dict | None:
 
 
 def _call_groq(case, candidates) -> dict | None:
-    """Groq serves open-weight models (Llama 3.x etc.) behind an
-    OpenAI-compatible API, so this reuses the openai SDK already a
-    dependency for _call_openai rather than adding a new one -- just
-    pointed at Groq's base_url with a Groq key. Chosen as the default
-    live provider over Gemini for two concrete reasons found during
-    testing: Groq's free-tier rate limit is well above Gemini's
-    15 requests/minute (a real risk of degrading every LLM call to the
-    offline heuristic under a judge's live run), and Groq's inference is
-    fast enough that more of a batch's deferred cases finish within
-    matcher.LLM_BATCH_TIME_BUDGET_SECONDS instead of timing out.
+    """Groq serves open-weight models behind an OpenAI-compatible API, so
+    this reuses the openai SDK already a dependency for _call_openai
+    rather than adding a new one -- just pointed at Groq's base_url with
+    a Groq key. Chosen as the default live provider over Gemini after
+    Gemini's 15 requests/minute free-tier limit was actually hit during
+    testing, silently degrading every LLM call to the offline heuristic.
+
+    Groq's own free tier turned out to have its own tight constraint,
+    just a different shape: a tokens-per-minute cap (around 6000-8000 TPM
+    on the models actually available on this account, regardless of which
+    one is picked) rather than a request-count cap, and it's real -- the
+    default candidate list (every remaining unmatched bank line) was
+    large enough to hit it in about 4 calls. matcher._narrow_llm_candidates
+    trims each case's candidates to a plausible amount window before this
+    is ever called, which is what actually fixes it; max_retries=0 here
+    is the other half -- the SDK's default (2, with backoff) can retry a
+    429 for many seconds past the batch's own time budget before ever
+    raising, so a rate-limited call would never surface as done or failed
+    in time for the batch-level fallback to kick in.
     """
     from openai import OpenAI
     client = OpenAI(api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1",
-                     timeout=PROVIDER_CALL_TIMEOUT_SECONDS)
+                     timeout=PROVIDER_CALL_TIMEOUT_SECONDS, max_retries=0)
     resp = client.chat.completions.create(
-        model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
+        model=os.getenv("LLM_MODEL", "openai/gpt-oss-20b"),
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": _build_user_prompt(case, candidates)},
@@ -313,7 +329,7 @@ def answer_question(question: str, summary: dict, exceptions: list[dict],
     try:
         if provider == "openai":
             from openai import OpenAI
-            client = OpenAI()
+            client = OpenAI(max_retries=0)
             resp = client.chat.completions.create(
                 model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
                 messages=[{"role": "system", "content": QA_SYSTEM_PROMPT},
@@ -323,7 +339,7 @@ def answer_question(question: str, summary: dict, exceptions: list[dict],
             return resp.choices[0].message.content
         if provider == "anthropic":
             import anthropic
-            client = anthropic.Anthropic()
+            client = anthropic.Anthropic(max_retries=0)
             resp = client.messages.create(
                 model=os.getenv("LLM_MODEL", "claude-haiku-4-5-20251001"),
                 max_tokens=300, system=QA_SYSTEM_PROMPT,
@@ -340,9 +356,10 @@ def answer_question(question: str, summary: dict, exceptions: list[dict],
             return resp.text
         if provider == "groq":
             from openai import OpenAI
-            client = OpenAI(api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1")
+            client = OpenAI(api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1",
+                             max_retries=0)
             resp = client.chat.completions.create(
-                model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
+                model=os.getenv("LLM_MODEL", "openai/gpt-oss-20b"),
                 messages=[{"role": "system", "content": QA_SYSTEM_PROMPT},
                           {"role": "user", "content": context}],
                 temperature=0,
