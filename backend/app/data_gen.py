@@ -14,6 +14,8 @@ never by the matcher itself).
 from __future__ import annotations
 
 import random
+import re
+import string
 from datetime import datetime, timedelta
 from typing import Literal
 
@@ -67,14 +69,30 @@ def _weighted_anomaly(rng: random.Random, weights: dict[str, float]) -> Anomaly:
     return rng.choices(kinds, weights=vals, k=1)[0]
 
 
+# Real Razorpay settlement UTRs/reference numbers are prefixed by the
+# receiving bank's own code (e.g. "AXISCN0841380906", "CB0042644252"),
+# not a literal "UTR" string -- matching a real settlement export's look,
+# not just its substring-matching *behavior* (which never cared about the
+# specific prefix text either way).
+BANK_UTR_PREFIXES = ["AXISCN", "HDFCR", "ICICN", "SBIN", "KKBK", "CB", "PUNB", "YESB"]
+
+
 def _utr(rng: random.Random) -> str:
-    return f"UTR{rng.randint(10**8, 10**9 - 1)}"
+    prefix = rng.choice(BANK_UTR_PREFIXES)
+    return f"{prefix}{rng.randint(0, 10**10 - 1):010d}"
+
+
+def _random_id_suffix(rng: random.Random, length: int = 14) -> str:
+    alphabet = string.ascii_letters + string.digits
+    return "".join(rng.choice(alphabet) for _ in range(length))
 
 
 def _garble(utr: str, rng: random.Random) -> str:
     # simulate a bank narration mangling the UTR: truncation, prefix noise,
-    # or swapped digits, forcing free-text reasoning to resolve it.
-    body = utr.replace("UTR", "")
+    # or swapped digits, forcing free-text reasoning to resolve it. Strips
+    # the leading bank-code letters (not a literal "UTR"), so this stays
+    # correct regardless of which bank prefix _utr() picked.
+    body = re.sub(r"^[A-Za-z]+", "", utr)
     choice = rng.choice(["truncate", "prefix_noise", "swap"])
     if choice == "truncate":
         return f"NEFT/{body[:5]}.../CUST TXN"
@@ -188,7 +206,7 @@ def generate_batch(n_orders: int = 70, seed: int | None = None,
             settled_at = settled_at + timedelta(days=rng.randint(6, 10))
 
         settlements.append({
-            "settlement_id": f"stl_{rng.randint(10**9, 10**10 - 1)}",
+            "settlement_id": f"setl_{_random_id_suffix(rng)}",
             "payment_id": payment_id,
             "utr": utr,
             "amount": net_amount,
@@ -198,7 +216,7 @@ def generate_batch(n_orders: int = 70, seed: int | None = None,
         if anomaly == "duplicate_settlement":
             dup_amount = round(net_amount * rng.uniform(0.98, 1.0), 2)
             settlements.append({
-                "settlement_id": f"stl_{rng.randint(10**9, 10**10 - 1)}",
+                "settlement_id": f"setl_{_random_id_suffix(rng)}",
                 "payment_id": payment_id,
                 "utr": _utr(rng),
                 "amount": dup_amount,
@@ -296,7 +314,7 @@ def _generate_batch_settlements(orders: list[dict], settlements: list[dict],
         settled_at = earliest_created + timedelta(days=rng.randint(1, 2))
 
         settlements.append({
-            "settlement_id": f"stl_{rng.randint(10**9, 10**10 - 1)}",
+            "settlement_id": f"setl_{_random_id_suffix(rng)}",
             "payment_id": group[0]["razorpay_payment_id"],  # backward-compatible single reference
             "payment_ids": [o["razorpay_payment_id"] for o in group],
             "utr": utr,

@@ -417,7 +417,16 @@ def test_batch_settlement_orders_are_resolved_without_llm():
     multiple payment_ids (modelling Razorpay's actual batch-settlement
     behaviour), matched to one bank line. Must resolve entirely in the
     rule pass -- no LLM needed, since the settlement's own UTR ties the
-    group to its bank line deterministically."""
+    group to its bank line deterministically.
+
+    _generate_batch_settlements can legitimately produce a trailing group
+    of exactly one order (whatever's left over after grouping in 2s/3s) --
+    that's not really a "batch" of one, so the matcher correctly resolves
+    it via the ordinary `exact` pass instead of `batch_settlement` (see
+    reconcile()'s `len(covered_ids) <= 1` check). Both are fully
+    rule-based, no-LLM outcomes, so this accepts either method rather than
+    assuming every _truth=="batch_settlement" order lands in a real group.
+    """
     batch = data_gen.generate_batch(n_orders=200, seed=99)
     batch_order_ids = {o["order_id"] for o in batch["orders"] if o["_truth"] == "batch_settlement"}
     assert batch_order_ids, "expected at least one batch_settlement order at this seed"
@@ -427,7 +436,9 @@ def test_batch_settlement_orders_are_resolved_without_llm():
 
     for order_id in batch_order_ids:
         assert order_id in matched_by_rules, f"{order_id} should resolve in the rule pass alone"
-        assert matched_by_rules[order_id]["method"] == "batch_settlement"
+        assert matched_by_rules[order_id]["method"] in ("batch_settlement", "exact")
+    assert any(m["method"] == "batch_settlement" for oid, m in matched_by_rules.items()
+               if oid in batch_order_ids), "expected at least one genuine (size >1) batch group at this seed"
 
 
 def test_batch_settlement_matches_every_member_order_to_the_shared_settlement():
