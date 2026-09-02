@@ -881,6 +881,130 @@ def test_refund_exactly_on_settlement_date_counts_as_pre_settlement():
     assert len(result["matches"]) == 1
 
 
+# ---- over-refund validation: refunds summing past the order's own value ----
+
+def _order_settlement_bank(order_amount, refund_amount, refund_id="rfnd1",
+                            refunded_at="2026-08-06", post_settlement=True):
+    """Shared fixture: one order, settled legitimately at its full amount,
+    with a refund debited from the bank -- varying only the refund amount
+    and timing, so each over-refund test isolates that one variable."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": order_amount,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
+                  "amount": order_amount, "settled_at": "2026-08-02"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT",
+                   "amount": order_amount, "value_date": "2026-08-02"},
+                  {"line_id": "bl_refund1", "narration": f"REFUND-{refund_id}-RAZORPAY PAYOUT",
+                   "amount": -refund_amount, "value_date": "2026-08-07"}]
+    refund = {"refund_id": refund_id, "payment_id": "pay_1", "amount": refund_amount,
+              "refunded_at": refunded_at, "type": "full"}
+    return order, settlement, bank_lines, refund
+
+
+def test_refund_total_equal_to_order_amount_is_not_over_refund():
+    order, settlement, bank_lines, refund = _order_settlement_bank(1000.0, 1000.0)
+    result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])
+    assert not any(e["type"] == "refund_amount_exceeds_order" for e in result["exceptions"])
+
+
+def test_refund_total_less_than_order_amount_is_not_over_refund():
+    order, settlement, bank_lines, refund = _order_settlement_bank(1000.0, 400.0)
+    result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])
+    assert not any(e["type"] == "refund_amount_exceeds_order" for e in result["exceptions"])
+
+
+def test_refund_total_greater_than_order_amount_is_flagged():
+    order, settlement, bank_lines, refund = _order_settlement_bank(1000.0, 1200.0)
+    result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])
+    over = [e for e in result["exceptions"] if e["type"] == "refund_amount_exceeds_order"]
+    assert len(over) == 1
+    assert over[0]["order_id"] == "ORD1"
+    assert over[0]["amount"] == 200.0  # the excess, not the full refund total
+
+
+def test_multiple_refunds_summed_can_trigger_over_refund():
+    """Neither refund alone exceeds the order, but together they do --
+    this must be caught by summing all of a payment's refunds, not by
+    checking each refund row in isolation."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
+                  "amount": 1000.0, "settled_at": "2026-08-02"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT",
+                   "amount": 1000.0, "value_date": "2026-08-02"},
+                  {"line_id": "bl_refund1", "narration": "REFUND-rfnd1-RAZORPAY PAYOUT",
+                   "amount": -600.0, "value_date": "2026-08-03"},
+                  {"line_id": "bl_refund2", "narration": "REFUND-rfnd2-RAZORPAY PAYOUT",
+                   "amount": -500.0, "value_date": "2026-08-04"}]
+    refunds = [{"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 600.0,
+                "refunded_at": "2026-08-03", "type": "partial"},
+               {"refund_id": "rfnd2", "payment_id": "pay_1", "amount": 500.0,
+                "refunded_at": "2026-08-04", "type": "partial"}]
+
+    result = matcher.reconcile([order], [settlement], bank_lines, refunds=refunds)
+    over = [e for e in result["exceptions"] if e["type"] == "refund_amount_exceeds_order"]
+    assert len(over) == 1
+    assert over[0]["amount"] == 100.0  # 600 + 500 - 1000
+
+
+def test_full_refund_at_exact_order_amount_is_not_over_refund():
+    """A plain full refund (no settlement at all -- Razorpay never
+    generates one) must not be flagged just because the refund equals
+    the order's full amount."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    refund = {"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 1000.0,
+              "refunded_at": "2026-08-02T00:00:00", "type": "full"}
+    refund_debit = [{"line_id": "bl_refund1", "narration": "REFUND-rfnd1-RAZORPAY PAYOUT",
+                      "amount": -1000.0, "value_date": "2026-08-02"}]
+
+    result = matcher.reconcile([order], [], refund_debit, refunds=[refund])
+    assert not any(e["type"] == "refund_amount_exceeds_order" for e in result["exceptions"])
+
+
+def test_post_settlement_over_refund_flags_the_refund_but_never_the_settlement():
+    """The critical invariant: an over-refund exception must be purely
+    additive. A legitimate post-settlement match (settled at the full,
+    correct amount, refunded afterward) must keep resolving as `exact`
+    with its normal "separate event, not netted" note -- the over-refund
+    check must never turn it into an amount_mismatch or remove the match,
+    even when the refund itself exceeds the order's value."""
+    order, settlement, bank_lines, refund = _order_settlement_bank(1000.0, 1500.0)
+    result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])
+
+    assert len(result["matches"]) == 1
+    match = result["matches"][0]
+    assert match["method"] == "exact"
+    assert "tracked as a separate event" in match["note"]
+    assert "not netted" in match["note"]
+    assert not any(e["type"] == "amount_mismatch" for e in result["exceptions"])
+
+    over = [e for e in result["exceptions"] if e["type"] == "refund_amount_exceeds_order"]
+    assert len(over) == 1
+    assert over[0]["amount"] == 500.0
+
+
+def test_over_refund_adds_only_the_excess_to_amount_at_risk_not_the_whole_order():
+    """summarize()'s at-risk figure sums the full order amount for every
+    order with an exception -- correct for exceptions meaning "this order
+    has no reconciled settlement," but refund_amount_exceeds_order can sit
+    on an order whose settlement matched perfectly fine. It must only add
+    its own excess, not double-count the whole (already-matched,
+    already-safe) order amount on top.
+
+    (total_amount_matched nets any refund total against the order amount,
+    floored at 0 -- an existing, separate netting rule this test doesn't
+    change -- so it's legitimately 0.0 here since the refund exceeds the
+    order; the fix under test is what happens to total_amount_at_risk.)
+    """
+    order, settlement, bank_lines, refund = _order_settlement_bank(1000.0, 1500.0)
+    result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])
+    summary = matcher.summarize([order], result, refunds=[refund], refund_matches=result["refund_matches"])
+
+    assert summary["total_amount_matched"] == 0.0
+    assert summary["total_amount_at_risk"] == 500.0  # the excess only, not 500 + 1000
+
+
 # ---- cash position: does a refund's money actually leave the bank? ----
 
 def test_refund_without_matching_bank_debit_surfaces_as_an_honest_exception():

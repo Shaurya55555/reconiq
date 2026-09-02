@@ -157,6 +157,45 @@ def _match_refund_debits(refunds: list[dict], unmatched_bank: dict[str, dict],
     return matches, exceptions
 
 
+def _check_over_refunds(orders: list[dict], refunds: list[dict], log) -> list[dict]:
+    """A refund record proves money was promised back, logically capped at
+    the order's own value -- refunds summing to more than the order ever
+    charged is a data-quality or fraud signal, not something the
+    settlement-matching passes are positioned to catch (each of those
+    only ever sees one settlement candidate at a time, not every refund
+    for that payment summed together). Deliberately independent of
+    settlement matching: this never touches `matches`, so a legitimate
+    settlement -- including one a post-settlement refund correctly left
+    unshrunk, see _net_refund_for_settlement -- is never invalidated by
+    this check. An order can carry both a clean settlement match and an
+    over-refund exception at the same time; that's the correct outcome,
+    not a contradiction.
+    """
+    refunds_by_payment: dict[str, list[dict]] = {}
+    for r in (refunds or []):
+        refunds_by_payment.setdefault(r["payment_id"], []).append(r)
+
+    exceptions = []
+    for order in orders:
+        order_refunds = refunds_by_payment.get(order["razorpay_payment_id"], [])
+        if not order_refunds:
+            continue
+        total_refunded = round(sum(r["amount"] for r in order_refunds), 2)
+        excess = round(total_refunded - order["amount"], 2)
+        if excess > 0.01:
+            exceptions.append({
+                "type": "refund_amount_exceeds_order", "order_id": order["order_id"],
+                "amount": excess,
+                "reason": f"Total refunds (Rs {total_refunded:,.2f}) for this order exceed its "
+                          f"own amount (Rs {order['amount']:,.2f}) by Rs {excess:,.2f} -- more was "
+                          "refunded than was ever charged.",
+            })
+            log("over_refund_check", "exception", "rule", 1.0,
+                f"Refund total Rs {total_refunded:,.2f} exceeds order amount Rs {order['amount']:,.2f} "
+                f"by Rs {excess:,.2f}", order_id=order["order_id"])
+    return exceptions
+
+
 def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict],
               fee_tolerance_pct: float = FEE_TOLERANCE_PCT,
               date_drift_ok_days: int = DATE_DRIFT_OK_DAYS,
@@ -368,6 +407,7 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
 
     refund_matches, refund_exceptions = _match_refund_debits(refunds or [], unmatched_bank, log)
     exceptions.extend(refund_exceptions)
+    exceptions.extend(_check_over_refunds(orders, refunds, log))
 
     return {
         "matches": matches,
@@ -648,10 +688,21 @@ def summarize(orders: list[dict], result: dict, refunds: list[dict] | None = Non
     # overstate exposure. Exceptions with no order_id (an orphan bank line)
     # carry their own "amount" and are added on top, since they're real
     # money movements not attributable to any order.
-    excepted_order_ids = {e["order_id"] for e in result["exceptions"] if e.get("order_id")}
+    #
+    # refund_amount_exceeds_order is different in kind from every other
+    # exception type here: it's deliberately additive (see
+    # _check_over_refunds) and can sit on an order whose settlement is
+    # otherwise cleanly matched -- folding it into the same "count the
+    # whole order amount" rule would inflate at-risk by the full order
+    # value over what's actually anomalous (the excess). It carries its
+    # own accurate `amount` (the excess), so it's summed like an
+    # orphan-bank-line exception instead.
+    excepted_order_ids = {e["order_id"] for e in result["exceptions"]
+                           if e.get("order_id") and e["type"] != "refund_amount_exceeds_order"}
     total_amount_at_risk = round(
         sum(amount_by_order_id.get(oid, 0.0) for oid in excepted_order_ids)
-        + sum(e.get("amount", 0.0) for e in result["exceptions"] if not e.get("order_id")), 2)
+        + sum(e.get("amount", 0.0) for e in result["exceptions"]
+              if not e.get("order_id") or e["type"] == "refund_amount_exceeds_order"), 2)
 
     # Cash position: a refund record proves money was promised back, not
     # that it left the account -- these three numbers separate "refunded

@@ -1676,8 +1676,8 @@ function renderCalibration(data) {
     ? zeroFalseClear.reduce((a, b) => (b.match_rate > a.match_rate ? b : a))
     : data.results.reduce((a, b) => (b.false_clear_amount < a.false_clear_amount ? b : a));
   const note = zeroFalseClear.length
-    ? `Recommended: ${best.confidence_threshold} &mdash; the loosest threshold in this sweep that still kept false-clear money at ₹0, maximizing coverage without confidently clearing a mistake.`
-    : `No threshold in this sweep kept false-clear money at ₹0. Least-bad option: ${best.confidence_threshold} (₹${best.false_clear_amount.toLocaleString("en-IN")} false-clear) &mdash; consider a stricter sweep.`;
+    ? `Best threshold in this evaluation: ${best.confidence_threshold} &mdash; the loosest threshold in this one fixed batch/one round of LLM verdicts that still kept false-clear money at ₹0, maximizing coverage without confidently clearing a mistake. Not a claim of a globally optimal threshold -- run this sweep across multiple seeds before treating it as a production default.`
+    : `No threshold in this evaluation kept false-clear money at ₹0. Least-bad option in this batch: ${best.confidence_threshold} (₹${best.false_clear_amount.toLocaleString("en-IN")} false-clear) &mdash; consider a stricter sweep.`;
   $("calibration-recommendation").innerHTML = note;
 }
 
