@@ -35,6 +35,25 @@ def _parse_date(s: str) -> date:
     return datetime.fromisoformat(s).date() if "T" not in s else datetime.fromisoformat(s).date()
 
 
+def _is_settlement_credit_candidate(b: dict) -> bool:
+    """A settlement represents money the merchant *received*, so only a
+    genuine inbound bank line (amount > 0) is ever valid evidence that one
+    cleared. A debit whose magnitude happens to equal a settlement's
+    amount proves nothing -- it could be an unrelated reversal, a
+    chargeback debit, or any other outbound leg -- and must never be
+    treated as settlement-match evidence, whether by the deterministic
+    single/group passes, a batch settlement, the offline heuristic, or a
+    real LLM call. A zero-amount line is excluded here too: it has its
+    own dedicated zero_amount_bank_line exception (see reconcile()), not
+    generic credit evidence. This is the single choke point every
+    settlement-match candidate pool must be filtered through; refund-debit
+    confirmation (_match_refund_debits) is a different question entirely
+    and correctly requires the opposite (amount < 0), so it does not use
+    this helper.
+    """
+    return b.get("amount", 0) > 0
+
+
 def _net_refund_for_settlement(order: dict, stl: dict, order_refunds: list[dict]) -> tuple[dict, float, float]:
     """A refund only shrinks what a settlement is expected to pay out if it
     happened at or before that settlement -- Razorpay nets a pre-settlement
@@ -380,7 +399,8 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
         agg_order = {"amount": sum(o["amount"] for o in group_orders),
                      "created_at": min(o["created_at"] for o in group_orders)}
 
-        utr_matches = [b for b in unmatched_bank.values() if stl["utr"] in b["narration"]]
+        utr_matches = [b for b in unmatched_bank.values()
+                       if stl["utr"] in b["narration"] and _is_settlement_credit_candidate(b)]
         if not utr_matches:
             continue  # falls through to the normal per-order loop below, which will
                        # surface this honestly (as amount_mismatch or an exception)
@@ -466,7 +486,8 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
         for stl in candidate_settlements:
             if stl["settlement_id"] in resolved_settlement_ids:
                 continue
-            utr_matches = [b for b in unmatched_bank.values() if stl["utr"] in b["narration"]]
+            utr_matches = [b for b in unmatched_bank.values()
+                           if stl["utr"] in b["narration"] and _is_settlement_credit_candidate(b)]
             if not utr_matches:
                 continue
             match_order, pre, post = _net_refund_for_settlement(order, stl, order_refunds)
@@ -507,8 +528,13 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
             # currency-rounding-close to the settlement's own amount --
             # used below to decide zero/date-drift/amount_mismatch and to
             # claim the line so the end-of-pass sweep never double-counts
-            # it as an unrelated orphan.
-            own_bank_line = next((b for b in stl_utr_matches if abs(b["amount"] - stl["amount"]) <= 0.01), None)
+            # it as an unrelated orphan. Filtered to credit-only lines --
+            # a debit whose magnitude happens to equal the settlement is
+            # not valid evidence (see _is_settlement_credit_candidate);
+            # zero_bank_line below intentionally uses the unfiltered list
+            # since it has its own dedicated exception path.
+            credit_utr_matches = [b for b in stl_utr_matches if _is_settlement_credit_candidate(b)]
+            own_bank_line = next((b for b in credit_utr_matches if abs(b["amount"] - stl["amount"]) <= 0.01), None)
             zero_bank_line = next((b for b in stl_utr_matches if b["amount"] == 0), None)
             date_drift = abs((_parse_date(stl["settled_at"]) - _parse_date(order["created_at"])).days)
             base_amount = match_order["amount"] or order["amount"] or 1.0
@@ -693,7 +719,16 @@ def resolve_llm_verdicts(rule_result: dict, llm_resolve_fn,
     if not llm_resolve_fn:
         return [(case, None) for case in cases]
 
-    candidates = list({b["line_id"]: b for b in rule_result["unmatched_bank_lines"]}.values())
+    # Debit/zero-amount lines are never valid settlement-match evidence
+    # (see _is_settlement_credit_candidate) -- filtered out here, before
+    # _narrow_llm_candidates or any resolver ever sees them, so the
+    # amount-window narrowing's empty-window fallback (returning the full
+    # candidate list when nothing survives the window) can never
+    # reintroduce one. Without this, a debit line whose magnitude equals
+    # the expected amount could reach an LLM/heuristic call and be
+    # confidently (wrongly) accepted as a match on amount alone.
+    candidates = list({b["line_id"]: b for b in rule_result["unmatched_bank_lines"]
+                        if _is_settlement_credit_candidate(b)}.values())
 
     pool = ThreadPoolExecutor(max_workers=LLM_MAX_CONCURRENCY)
     future_to_case = {pool.submit(llm_resolve_fn, case, _narrow_llm_candidates(case, candidates)): case
@@ -769,7 +804,14 @@ def apply_confidence_threshold(rule_result: dict, case_verdicts: list[tuple[dict
 
     for case, verdict in case_verdicts:
         resolution_source = _llm_resolution_source(verdict)
-        if verdict and verdict.get("bank_line_id") in unmatched_bank and verdict.get("confidence", 0) >= confidence_threshold:
+        # Defense-in-depth, independent of resolve_llm_verdicts already
+        # filtering debit/zero lines out of the candidate pool: never
+        # accept an LLM/heuristic verdict pointing at a non-credit bank
+        # line as a settlement match, even if a future bug reintroduces
+        # one into the candidates a resolver saw.
+        candidate_is_credit = (verdict and verdict.get("bank_line_id") in unmatched_bank
+                                and _is_settlement_credit_candidate(unmatched_bank[verdict["bank_line_id"]]))
+        if verdict and candidate_is_credit and verdict.get("confidence", 0) >= confidence_threshold:
             bank_hit = unmatched_bank.pop(verdict["bank_line_id"])
             matches.append({
                 "order_id": case["order_id"], "settlement_id": case["settlement_id"],

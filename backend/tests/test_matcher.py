@@ -282,6 +282,124 @@ def test_zero_amount_bank_line_does_not_suppress_a_sibling_duplicate_candidate()
     assert types == ["duplicate_candidate", "zero_amount_bank_line"]
 
 
+def test_debit_line_matching_settlement_magnitude_never_becomes_a_match():
+    """Regression test for a real production bug (HARD MODE 200 dataset):
+    a debit bank line (money leaving the account, negative amount) whose
+    magnitude happened to equal a settlement's expected amount, with that
+    settlement's own UTR in the narration, was handed to the LLM resolver
+    as a candidate and confidently (wrongly) matched at 0.99-1.0
+    confidence -- exactly the "confidently wrong" failure this project
+    exists to prevent. A settlement is inherently a credit event; a debit
+    of the same magnitude proves nothing about it. Uses a stub resolver
+    that WOULD happily match on magnitude+narration alone (mimicking the
+    real LLM's actual observed behavior) to prove the debit line is never
+    even offered as a candidate, not just that this particular stub
+    happens to decline."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 21416.05,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTRDEBIT1",
+                  "amount": 21416.05, "settled_at": "2026-08-02"}
+    # narration contains the settlement's own UTR, but this is a debit
+    bank_lines = [{"line_id": "bl1", "narration": "RZP UTRDEBIT1",
+                   "amount": -21416.05, "value_date": "2026-08-02", "direction": "debit"}]
+
+    rule_result = matcher.reconcile([order], [settlement], bank_lines)
+    assert not rule_result["matches"]
+    assert len(rule_result["needs_llm"]) == 1
+
+    def gullible_resolver(case, candidates):
+        # A naive resolver that matches on magnitude alone, the same
+        # mistake the real LLM made -- if the debit line ever reaches
+        # here, this proves it by "confidently" selecting it.
+        assert candidates == [], f"debit line must never be offered as a candidate, got {candidates}"
+        return {"bank_line_id": None, "confidence": 0.0, "reasoning": "no real candidates"}
+
+    final = matcher.apply_llm_resolutions(rule_result, gullible_resolver)
+    assert not final["matches"]
+    assert any(e["order_id"] == "ORD1" for e in final["exceptions"])
+
+
+def test_zero_amount_line_is_also_never_offered_to_the_llm_resolver():
+    """Same guarantee as the debit case, for a zero-amount line that
+    somehow wasn't claimed by the dedicated zero_amount_bank_line check
+    (e.g. a different settlement's needs_llm case sharing the unmatched
+    pool) -- zero is not credit evidence either."""
+    orders = [
+        {"order_id": "ORD1", "customer": "A", "amount": 500.0,
+         "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"},
+        {"order_id": "ORD2", "customer": "B", "amount": 900.0,
+         "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_2"},
+    ]
+    settlements = [
+        {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTRGARBLED1",
+         "amount": 500.0, "settled_at": "2026-08-02"},
+        {"settlement_id": "stl2", "payment_id": "pay_2", "utr": "UTRZEROX",
+         "amount": 900.0, "settled_at": "2026-08-02"},
+    ]
+    bank_lines = [
+        {"line_id": "bl1", "narration": "truncated ref", "amount": 500.0, "value_date": "2026-08-02"},
+        {"line_id": "bl2", "narration": "RZP UTRZEROX", "amount": 0.0, "value_date": "2026-08-02"},
+    ]
+
+    rule_result = matcher.reconcile(orders, settlements, bank_lines)
+    # ORD2/stl2 resolves deterministically via the dedicated zero-amount
+    # check; only ORD1 (garbled narration) is left needing the LLM.
+    assert len(rule_result["needs_llm"]) == 1
+    assert rule_result["needs_llm"][0]["order_id"] == "ORD1"
+
+    seen_candidates = []
+
+    def recording_resolver(case, candidates):
+        seen_candidates.extend(candidates)
+        return {"bank_line_id": None, "confidence": 0.0, "reasoning": "no match"}
+
+    matcher.apply_llm_resolutions(rule_result, recording_resolver)
+    assert "bl2" not in {c["line_id"] for c in seen_candidates}
+
+
+def test_group_split_never_sums_a_debit_line_into_the_settlement_amount():
+    """The group_split pass (multiple bank lines sharing a UTR summing to
+    the settlement amount) must only ever combine genuine credit lines --
+    a debit line participating in the sum would mean the "settlement
+    amount" was actually reached by netting money that left the account
+    against money that arrived, which is not evidence the settlement
+    itself cleared."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 10000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTRGROUP1",
+                  "amount": 10000.0, "settled_at": "2026-08-02"}
+    # 12000 (credit) + (-2000) (debit) sums to 10000 -- must NOT be treated
+    # as a valid group_split; only a genuine 2-or-more credit-line sum may.
+    bank_lines = [
+        {"line_id": "bl1", "narration": "RZP UTRGROUP1", "amount": 12000.0, "value_date": "2026-08-02"},
+        {"line_id": "bl2", "narration": "RZP UTRGROUP1", "amount": -2000.0, "value_date": "2026-08-02",
+         "direction": "debit"},
+    ]
+
+    result = matcher.reconcile([order], [settlement], bank_lines)
+
+    assert not any(m["order_id"] == "ORD1" and m["method"] == "group_split" for m in result["matches"])
+
+
+def test_llm_verdict_pointing_at_a_debit_line_is_rejected_even_if_offered():
+    """Defense-in-depth at the acceptance point (apply_confidence_threshold),
+    independent of resolve_llm_verdicts already filtering candidates: even
+    if a resolver verdict names a debit/zero-amount bank_line_id (e.g. a
+    future bug reintroduces one into the candidate pool), it must never be
+    accepted as a match."""
+    case = {"order_id": "ORD1", "settlement_id": "stl1", "expected_utr": "UTR1",
+            "expected_amount": 100.0, "utr_seen_in_narration": True}
+    rule_result = {"matches": [], "exceptions": [], "audit_trail": [],
+                    "unmatched_bank_lines": [{"line_id": "bl1", "amount": -100.0, "narration": "RZP UTR1",
+                                               "value_date": "2026-08-02"}]}
+    verdict = {"bank_line_id": "bl1", "confidence": 0.99, "reasoning": "amount matches -100.0 exactly"}
+
+    result = matcher.apply_confidence_threshold(rule_result, [(case, verdict)], confidence_threshold=0.6)
+
+    assert not result["matches"]
+    assert result["exceptions"][0]["order_id"] == "ORD1"
+
+
 def test_groq_is_a_registered_provider_and_falls_back_cleanly_on_error(monkeypatch):
     """Groq (OpenAI-compatible API, reuses the openai SDK dependency) is
     the new recommended default -- see .env.example -- alongside the
