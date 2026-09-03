@@ -628,7 +628,9 @@
   </section>
 
   <section id="matches-section" style="display:none">
-    <h2>Matches by method</h2>
+    <h2>Matches by method
+      <button class="secondary" id="export-matches-btn">Export CSV</button>
+    </h2>
     <div id="matches-table"></div>
   </section>
 
@@ -1499,6 +1501,11 @@ $("chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") askQ
 $("export-exceptions-btn").addEventListener("click", () => {
   if (!currentRun) return;
   downloadCsv("reconiq_exceptions.csv", currentRun.exceptions, ["type", "order_id", "settlement_id", "bank_line_id", "reason"]);
+});
+$("export-matches-btn").addEventListener("click", () => {
+  if (!currentRun) return;
+  downloadCsv("reconiq_matches.csv", currentRun.matches,
+              ["order_id", "settlement_id", "bank_line_id", "method", "confidence", "note"]);
 });
 $("export-audit-btn").addEventListener("click", () => {
   if (!currentRun) return;
