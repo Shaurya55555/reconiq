@@ -184,6 +184,27 @@ def test_amount_at_risk_counts_each_order_once_even_with_multiple_exceptions():
     assert summary["total_amount_matched"] == 0.0
 
 
+def test_unrecognized_bank_line_reports_a_positive_exposure_even_for_an_outbound_line():
+    """Regression test: an unclaimed OUTBOUND bank line (negative amount --
+    money left the account with no matching refund/order) is genuine
+    financial exposure, same magnitude of risk as an unclaimed inbound
+    line. reconcile() used to carry the bank line's raw signed amount
+    straight into the exception, so a negative one *subtracted* from
+    total_amount_at_risk instead of adding to it -- an unexplained debit
+    made the dashboard's at-risk figure look safer, backwards from what a
+    finance controller needs."""
+    unmatched_outbound = {"line_id": "bl1", "narration": "REFUND-unknown-PAYOUT",
+                           "amount": -5000.0, "value_date": "2026-08-02"}
+    rule_result = matcher.reconcile([], [], [unmatched_outbound])
+    result = matcher.apply_llm_resolutions(rule_result, llm_resolve_fn=None)
+    unrec = [e for e in result["exceptions"] if e["type"] == "unrecognized_bank_line"]
+    assert len(unrec) == 1
+    assert unrec[0]["amount"] == 5000.0  # magnitude, not the raw -5000.0
+
+    summary = matcher.summarize([], result)
+    assert summary["total_amount_at_risk"] == 5000.0
+
+
 def test_amount_matched_sums_only_matched_orders():
     """A refunded (method="refunded") order contributes zero net settlement
     money even though it's matched -- nothing settled for it. A

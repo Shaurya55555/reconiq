@@ -673,9 +673,16 @@ def apply_confidence_threshold(rule_result: dict, case_verdicts: list[tuple[dict
             })
 
     for bank_line_id, bl in unmatched_bank.items():
+        # An unexplained outbound line (negative amount -- money leaving the
+        # account with no matching refund/order) is real exposure, same as
+        # an unexplained inbound one -- the exception's `amount` is a risk
+        # magnitude fed into total_amount_at_risk, not a signed ledger
+        # entry, so a negative value here would silently *reduce* at-risk
+        # instead of adding to it. The reason text keeps the real signed
+        # value for clarity about direction.
         exceptions.append({
             "type": "unrecognized_bank_line", "bank_line_id": bank_line_id,
-            "amount": bl["amount"],
+            "amount": abs(bl["amount"]),
             "reason": f"Bank line for amount {bl['amount']} on {bl['value_date']} does not "
                       "correspond to any order in this batch.",
         })

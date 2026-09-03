@@ -107,7 +107,19 @@ class UploadRunRequest(BaseModel):
     materiality_threshold: float = matcher.DEFAULT_MATERIALITY_THRESHOLD
 
 
-def _validate_and_coerce(rows: list[dict], required: set[str], label: str) -> list[dict]:
+def _validate_and_coerce(rows: list[dict], required: set[str], label: str,
+                          allow_negative: bool = False) -> list[dict]:
+    """allow_negative defaults to False because an order/settlement/refund/
+    chargeback amount is always a magnitude in real Razorpay data -- there's
+    no such thing as a negative order price or a negative refund. Only
+    bank_lines legitimately carries negative amounts (an outbound debit,
+    e.g. a refund leaving the account), so that's the one caller that
+    passes allow_negative=True. A negative amount elsewhere is invalid
+    input, not a business scenario to silently accept -- summing it in
+    unchecked corrupts every total downstream (total_amount_refunded going
+    negative, at-risk figures becoming internally inconsistent) instead of
+    surfacing as the honest upload error it actually is.
+    """
     if not rows:
         raise ValueError(f"No {label} rows provided.")
     cleaned = []
@@ -120,6 +132,8 @@ def _validate_and_coerce(rows: list[dict], required: set[str], label: str) -> li
             row["amount"] = float(row["amount"])
         except (TypeError, ValueError):
             raise ValueError(f"{label} row {i + 1} has a non-numeric amount: {row.get('amount')!r}")
+        if not allow_negative and row["amount"] < 0:
+            raise ValueError(f"{label} row {i + 1} has a negative amount: {row['amount']!r}")
         cleaned.append(row)
     return cleaned
 
@@ -410,7 +424,8 @@ def run_uploaded_data(req: UploadRunRequest):
         settlements = _validate_and_coerce(req.settlements, REQUIRED_SETTLEMENT_FIELDS, "settlements")
         settlements = _coerce_settlement_payment_ids(settlements)
         settlements = _coerce_settlement_is_instant(settlements)
-        bank_lines = _validate_and_coerce(req.bank_lines, REQUIRED_BANK_LINE_FIELDS, "bank_lines")
+        bank_lines = _validate_and_coerce(req.bank_lines, REQUIRED_BANK_LINE_FIELDS, "bank_lines",
+                                           allow_negative=True)
         refunds = _validate_and_coerce(req.refunds, REQUIRED_REFUND_FIELDS, "refunds") if req.refunds else []
         chargebacks = (_coerce_chargeback_fee(
             _validate_and_coerce(req.chargebacks, REQUIRED_CHARGEBACK_FIELDS, "chargebacks"))

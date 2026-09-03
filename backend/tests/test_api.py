@@ -159,6 +159,52 @@ def test_run_upload_endpoint_accepts_a_comma_delimited_payment_ids_column():
     assert methods == {"ORD1": "batch_settlement", "ORD2": "batch_settlement"}
 
 
+def test_run_upload_endpoint_rejects_a_negative_refund_amount():
+    """Regression test: a refund/order/settlement/chargeback amount is
+    always a magnitude in real Razorpay data -- there's no such thing as a
+    negative refund. _validate_and_coerce used to accept any numeric value
+    unchecked, so a malformed upload with a negative refund amount summed
+    straight into total_amount_refunded (going negative) and corrupted the
+    closing verdict's material-vs-total exception math (a negative-amount
+    exception can drag total_exception_amount below
+    material_exception_amount, which should be impossible since material
+    is a subset of total). Must be rejected at upload time with a clear
+    error instead of silently corrupting every downstream total."""
+    orders = [{"order_id": "ORD1", "amount": 1000.0, "razorpay_payment_id": "pay_1",
+               "created_at": "2026-08-01T00:00:00"}]
+    settlements = [{"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR1",
+                     "amount": 1000.0, "settled_at": "2026-08-02"}]
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR1-RAZORPAY",
+                    "amount": 1000.0, "value_date": "2026-08-02"}]
+    refunds = [{"payment_id": "pay_1", "amount": -500.0}]
+
+    res = client.post("/api/run-upload", json={
+        "orders": orders, "settlements": settlements, "bank_lines": bank_lines, "refunds": refunds,
+    })
+    assert res.status_code == 400
+    assert "negative amount" in res.json()["detail"]
+
+
+def test_run_upload_endpoint_still_accepts_a_negative_bank_line_amount():
+    """A bank line legitimately carries a negative amount -- an outbound
+    debit, e.g. a refund leaving the account -- unlike every other upload
+    type. allow_negative=True for bank_lines specifically must not have
+    regressed alongside the new negative-amount rejection elsewhere."""
+    orders = [{"order_id": "ORD1", "amount": 1000.0, "razorpay_payment_id": "pay_1",
+               "created_at": "2026-08-01T00:00:00"}]
+    settlements = [{"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR1",
+                     "amount": 1000.0, "settled_at": "2026-08-02"}]
+    bank_lines = [
+        {"line_id": "bl1", "narration": "NEFT-UTR1-RAZORPAY", "amount": 1000.0, "value_date": "2026-08-02"},
+        {"line_id": "bl_refund", "narration": "REFUND-rfnd1-PAYOUT", "amount": -300.0, "value_date": "2026-08-03"},
+    ]
+
+    res = client.post("/api/run-upload", json={
+        "orders": orders, "settlements": settlements, "bank_lines": bank_lines,
+    })
+    assert res.status_code == 200
+
+
 def test_run_upload_endpoint_accepts_a_json_array_payment_ids_column():
     """A CSV cell can also hold a JSON-array-formatted list (e.g.
     '["pay_1","pay_2"]') instead of a bare comma-delimited string -- a
