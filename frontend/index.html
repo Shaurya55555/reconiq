@@ -614,6 +614,10 @@
         <h2 style="border:none;padding:0;margin-bottom:10px">Exceptions by reason</h2>
         <div id="chart-exceptions"></div>
       </div>
+      <div class="chart-box">
+        <h2 style="border:none;padding:0;margin-bottom:10px">Amount at risk by reason</h2>
+        <div id="chart-exception-amounts"></div>
+      </div>
     </div>
   </section>
 
@@ -802,6 +806,7 @@ function toggleTheme() {
   if (currentRun) {
     renderMethodChart(currentRun.matches);
     renderExceptionChart(currentRun.exceptions);
+    renderExceptionAmountChart(currentRun.exceptions);
   }
 }
 applyThemeIcons();
@@ -963,6 +968,7 @@ function renderAll(scrollTo = true) {
   renderSummary(currentRun.summary);
   renderMethodChart(currentRun.matches);
   renderExceptionChart(currentRun.exceptions);
+  renderExceptionAmountChart(currentRun.exceptions);
   renderExceptions(currentRun.exceptions);
   renderMatches(currentRun.matches);
   renderAudit(currentRun.audit_trail);
@@ -1380,13 +1386,14 @@ function renderSummary(s) {
   }
 }
 
-function barChart(containerId, entries, colorFor) {
+function barChart(containerId, entries, colorFor, formatValue) {
+  const format = formatValue || (v => v);
   const max = Math.max(1, ...entries.map(([, v]) => v));
-  $(containerId).innerHTML = entries.map(([label, count]) => `
+  $(containerId).innerHTML = entries.map(([label, value]) => `
     <div class="bar-row">
       <div class="bar-label">${esc(label)}</div>
-      <div class="bar-track"><div class="bar-fill" style="width:${(count / max) * 100}%; background:${colorFor(label)}"></div></div>
-      <div class="bar-count">${count}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${(value / max) * 100}%; background:${colorFor(label)}"></div></div>
+      <div class="bar-count">${format(value)}</div>
     </div>`).join("") || '<div class="empty">No data.</div>';
 }
 
@@ -1402,6 +1409,19 @@ function renderExceptionChart(exceptions) {
   exceptions.forEach(e => counts[e.type] = (counts[e.type] || 0) + 1);
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   barChart("chart-exceptions", entries, () => exceptionColor());
+}
+
+// A count-by-type chart treats a Rs.500 amount_mismatch and a Rs.5,00,000
+// one identically -- a financer's actual question is "where is my money
+// at risk," which is an amount, not a row count. classify_exceptions
+// (backend) already normalizes every exception's `amount` field (0 if it
+// never carried one), so this is a pure re-aggregation of data already on
+// the page, not a new metric.
+function renderExceptionAmountChart(exceptions) {
+  const amounts = {};
+  exceptions.forEach(e => { amounts[e.type] = (amounts[e.type] || 0) + (e.amount || 0); });
+  const entries = Object.entries(amounts).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  barChart("chart-exception-amounts", entries, () => exceptionColor(), (v) => rupees(v));
 }
 
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
