@@ -235,60 +235,65 @@ settlement timing, not the constants shipped here.
 
 ## Sample runs
 
-**Offline heuristic (no LLM key, 100 orders, seed=5):**
+**Offline heuristic (no LLM key, same 100 orders/seed=5 batch as the Groq
+run below, for a direct rules-only vs. rules+AI comparison):**
 
 ```
-match_rate:            0.83   (63 exact, 7 fuzzy, 13 heuristic-resolved)
-ground_truth_accuracy: 1.00
-exception_count:       30     (10 amount_mismatch, 10 unrecognized_bank_line,
-                                7 no_settlement_found, 3 duplicate_candidate)
+match_rate:            0.89   (44 exact, 26 fuzzy, 10 group_split, 3 batch_settlement, 6 refunded)
+ground_truth_accuracy: 0.96
+exception_count:       23     (7 unrecognized_bank_line, 4 unrecognized_narration,
+                                4 no_settlement_found, 3 amount_mismatch,
+                                3 refund_not_debited, 2 duplicate_candidate)
 throughput:             ~19,000 records/sec (in-process, no I/O)
 ```
 
-Reproduce with `POST /api/run {"n_orders": 100, "seed": 5}`.
+The 4 `unrecognized_narration` exceptions here are exactly the cases the
+Groq run below resolves — same batch, same seed, only the LLM layer
+differs. Reproduce with `POST /api/run {"n_orders": 100, "seed": 5}`
+against a deployment with no `LLM_PROVIDER` set.
 
-**Real Gemini (`gemini-flash-lite-latest`, 80 orders, seed=8), from the live deployment:**
-
-```
-match_rate:            0.8625  (4 of the garbled-narration cases resolved by the LLM)
-ground_truth_accuracy: 0.9875  (1 of 80 -- see below)
-```
-
-The one miss: order `ORD1070` (seeded as `garbled_narration`, i.e. it
-*should* have been resolvable) came back as an `unrecognized_narration`
-exception instead of a match — Gemini declined to guess rather than
-propose a low-confidence match. That's arguably the *correct* behavior
-for a finance system even though it counts against the accuracy score
-here: an honest "I don't know, here's why" beats a confident wrong match,
-which is the entire thesis of this project. Included here rather than
-cherry-picking the earlier all-heuristic 100% run, since a slightly
-imperfect number backed by a genuinely explainable miss is more credible
-than a suspiciously clean one.
-
-Reproduce with `POST /api/run {"n_orders": 80, "seed": 8}` against a
-deployment with `LLM_PROVIDER=gemini` configured.
-
-**Scale test (1,000 orders, seed=42, real Gemini, run locally):**
+**Real Groq (`openai/gpt-oss-20b`, 100 orders, seed=5), from the live deployment:**
 
 ```
-elapsed:                187.2s   (5.3 records/sec, dominated by ~65 sequential Gemini calls)
-match_rate:              0.865   (587 exact, 213 fuzzy, 65 llm)
-ground_truth_accuracy:   0.99
-amount_accuracy:         0.9897
-false_clear_amount:      ₹0
-safe_miss_amount:        ₹1,30,390
-exception_count:         231
+match_rate:            0.93    (44 exact, 26 fuzzy, 10 group_split, 3 batch_settlement,
+                                 6 refunded, 4 llm -- all 4 genuine Groq responses)
+ground_truth_accuracy: 1.00
+exception_count:       15      (4 no_settlement_found, 3 amount_mismatch,
+                                 3 refund_not_debited, 3 unrecognized_bank_line,
+                                 2 duplicate_candidate)
+elapsed:                3.06s  (real network calls to Groq, not the offline heuristic)
 ```
 
-**Honest limitation this surfaced:** the same 1,000-order request against
-the *live Vercel deployment* times out — a serverless function has a
-duration cap, and ~65 sequential LLM calls at real network latency
-exceeds it. Run locally (no serverless limit) it completes fine, at the
-throughput above. This is a real, known constraint, not glossed over: the
-deployed demo is sized for the batches shown throughout this README
-(≤100–150 orders); a production version would parallelize the LLM
-resolution calls rather than run them sequentially, or move long batches
-to a background job instead of a request/response cycle.
+Reproduce with `POST /api/run {"n_orders": 100, "seed": 5}` against a
+deployment with `LLM_PROVIDER=groq` configured (the live deployment's
+default — see `.env.example`).
+
+**Scale test (400 orders, seed=1, real Groq, against the live Vercel
+deployment — not run locally):**
+
+```
+elapsed:                 3.09s   (129.6 records/sec)
+match_rate:              0.895   (156 exact, 80 fuzzy, 45 group_split,
+                                   40 batch_settlement, 13 refunded, 24 llm)
+exception_count:         85
+```
+
+**A real constraint, and how it's actually handled now, not glossed
+over:** 24 cases needed the LLM in this batch; 12 got genuine Groq
+responses and 12 hit the provider's rate limit and fell back to the
+offline heuristic instead — visibly, in the audit trail, not silently.
+Earlier in this project, resolving LLM-deferred cases one at a time
+could add up past the serverless function's own time budget and 504 the
+whole request on a large batch; `matcher.resolve_llm_verdicts` now
+dispatches them to a bounded thread pool (5 concurrent, see
+`matcher.LLM_MAX_CONCURRENCY`) with a 6-second budget for the whole
+batch (`matcher.LLM_BATCH_TIME_BUDGET_SECONDS`), and each prompt is
+pre-filtered to a plausible amount window
+(`matcher._narrow_llm_candidates`) instead of sending every remaining
+bank line as a candidate. The batch above completed in 3.09s on the live
+deployment with zero timeouts -- the degrade-to-heuristic path exists
+and is exercised for real (12/24 cases here), but it no longer risks the
+whole request failing.
 
 ## Why this design (not just a rules engine with a chatbot bolted on)
 
@@ -320,7 +325,7 @@ use, and both are covered above.
 Every match or exception has a "Why?" drill-down showing the full
 lineage — order, settlement, and bank-line amounts, UTR vs. narration,
 date drift, whether AI was involved, and the actual reasoning. Below: a
-real case where Gemini correctly *declined* to guess on a garbled
+real case where the LLM correctly *declined* to guess on a garbled
 narration rather than propose a low-confidence match — an honest
 `unrecognized_narration` exception instead of a wrong clear.
 
@@ -343,7 +348,7 @@ flowchart TD
     D1 --> D2[Pass 2: Fuzzy match - fee / date drift]
     D2 --> D3[Pass 3: Group match - 1:N and N:1]
     D3 --> D4[Pass 4: Refund-aware match - pre vs post settlement]
-    D4 -->|still unresolved| LLM[Gemini LLM resolver]
+    D4 -->|still unresolved| LLM[LLM resolver - Groq]
     LLM --> GATE{Confidence >= threshold?}
     GATE -->|yes| MATCH[MATCH - evidence recorded]
     GATE -->|no| EXC[EXCEPTION - reason coded]
@@ -522,12 +527,6 @@ serverless function.
 
 **Deepening the existing loop (the direction this would grow in):**
 
-- **Parallelizing LLM resolution calls.** The 1,000-order scale test
-  above found the real ceiling: ~65 sequential Gemini calls take long
-  enough to exceed Vercel's serverless duration cap. Batching those
-  calls concurrently (or moving large batches to a background job
-  instead of the request/response cycle) would raise that ceiling
-  without changing the matching logic itself.
 - **Per-merchant persisted policy.** `fee_tolerance_pct` /
   `date_drift_ok_days` are request-level parameters today; a real
   deployment would persist these per merchant (real fee schedules and

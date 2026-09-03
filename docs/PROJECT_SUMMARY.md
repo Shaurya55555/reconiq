@@ -212,7 +212,7 @@ empirical basis for the default, not an assertion.
 
 ## Proof it works
 
-- **77/77 automated tests passing**, including dedicated adversarial
+- **102/102 automated tests passing**, including dedicated adversarial
   tests: group-split/batch-settlement matching never falsely combines
   unrelated bank lines or rescues a genuine amount mismatch; a refund
   only ever explains the gap it actually accounts for and never masks
