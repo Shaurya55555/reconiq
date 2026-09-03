@@ -622,6 +622,7 @@
 
   <section id="exceptions-section" style="display:none">
     <h2>Exception list (honest, not cherry-picked)
+      <button class="secondary" id="focus-unresolved-btn">Resolve unmatched orders</button>
       <button class="secondary" id="export-exceptions-btn">Export CSV</button>
     </h2>
     <div id="exceptions-table"></div>
@@ -1361,14 +1362,28 @@ function renderExceptionChart(exceptions) {
 
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 
+let focusUnresolvedOnly = false;
+
 function renderExceptions(exceptions) {
   if (!exceptions.length) {
     $("exceptions-table").innerHTML = '<div class="empty">No exceptions in this run.</div>';
     return;
   }
   const orphanBankLines = exceptions.filter(e => e.type === "unrecognized_bank_line" && e.bank_line_id);
-  const sorted = [...exceptions].sort((a, b) =>
+  let sorted = [...exceptions].sort((a, b) =>
     (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3) || (b.amount ?? 0) - (a.amount ?? 0));
+
+  // "Resolve unmatched orders" focus mode reuses this same table/state --
+  // it only narrows to rows that can actually be manually matched right now,
+  // rather than opening a separate queue/view.
+  if (focusUnresolvedOnly) {
+    sorted = sorted.filter(e => e.order_id && orphanBankLines.length);
+    if (!sorted.length) {
+      $("exceptions-table").innerHTML =
+        '<div class="empty">No unmatched orders with an unclaimed bank line to match against right now.</div>';
+      return;
+    }
+  }
 
   const highCount = sorted.filter(e => e.priority === "high").length;
   const top = sorted[0];
@@ -1510,6 +1525,15 @@ $("export-matches-btn").addEventListener("click", () => {
 $("export-audit-btn").addEventListener("click", () => {
   if (!currentRun) return;
   downloadCsv("reconiq_audit_trail.csv", currentRun.audit_trail, ["step", "decision", "method", "confidence", "order_id", "bank_line_id", "note"]);
+});
+
+$("focus-unresolved-btn").addEventListener("click", () => {
+  if (!currentRun) return;
+  focusUnresolvedOnly = !focusUnresolvedOnly;
+  $("focus-unresolved-btn").textContent = focusUnresolvedOnly ? "Show all exceptions" : "Resolve unmatched orders";
+  $("focus-unresolved-btn").classList.toggle("secondary", !focusUnresolvedOnly);
+  renderExceptions(currentRun.exceptions);
+  $("exceptions-section").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
 // Event delegation for override controls, since the tables re-render on
