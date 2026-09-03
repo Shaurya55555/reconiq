@@ -1465,9 +1465,18 @@ function renderAudit(trail) {
     <tbody>${rows}</tbody></table>`;
 }
 
+// Quoting a field only controls CSV *parsing* -- it does nothing to stop
+// Excel/Sheets from treating a cell starting with =, +, -, or @ as a
+// formula once opened, regardless of whether the CSV field was quoted.
+// A leading apostrophe forces those tools to render it as literal text.
+function csvCell(value) {
+  let s = String(value ?? "");
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return `"${s.replace(/"/g, '""')}"`;
+}
 function downloadCsv(filename, rows, columns) {
   const header = columns.join(",");
-  const body = rows.map(r => columns.map(c => `"${String(r[c] ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const body = rows.map(r => columns.map(c => csvCell(r[c])).join(",")).join("\n");
   const blob = new Blob([header + "\n" + body], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1551,7 +1560,7 @@ function manualMatchNote(orderId, select) {
   const bankAmount = option ? parseFloat(option.dataset.amount) : NaN;
   if (!order || Number.isNaN(bankAmount)) return base;
   const orderAmount = order.amount;
-  const diffPct = orderAmount ? Math.abs(bankAmount - orderAmount) / orderAmount : 1;
+  const diffPct = orderAmount ? Math.abs(bankAmount - orderAmount) / orderAmount : (bankAmount === 0 ? 0 : 1);
   if (diffPct <= 0.02) return base;
   return `${base} Note: bank line amount ${rupees(bankAmount)} differs from the order amount ` +
     `${rupees(orderAmount)} by ${(diffPct * 100).toFixed(1)}% -- not verified against a settlement ` +

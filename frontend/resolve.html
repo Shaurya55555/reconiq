@@ -332,7 +332,7 @@ function manualMatchNote(orderId, select) {
   const bankAmount = option ? parseFloat(option.dataset.amount) : NaN;
   if (!order || Number.isNaN(bankAmount)) return base;
   const orderAmount = order.amount;
-  const diffPct = orderAmount ? Math.abs(bankAmount - orderAmount) / orderAmount : 1;
+  const diffPct = orderAmount ? Math.abs(bankAmount - orderAmount) / orderAmount : (bankAmount === 0 ? 0 : 1);
   if (diffPct <= 0.02) return base;
   return `${base} Note: bank line amount ${rupees(bankAmount)} differs from the order amount ` +
     `${rupees(orderAmount)} by ${(diffPct * 100).toFixed(1)}% -- not verified against a settlement ` +
