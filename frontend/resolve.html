@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resolve unmatched orders - ReconIQ</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%AE%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800;900&display=swap">
+<script>
+  try {
+    var saved = localStorage.getItem("reconiq_theme");
+    if (saved === "dark") document.documentElement.setAttribute("data-theme", "dark");
+  } catch (e) { /* private mode, storage blocked, etc. -- default to light */ }
+</script>
+<style>
+  :root {
+    --bg: #F4F6F8; --bg2: #FFFFFF; --panel: #FFFFFF; --panel2: #F8FAFC; --border: #E5E7EB;
+    --border-soft: #EEF0F2; --text: #111827; --muted: #6B7280; --muted2: #9CA3AF;
+    --accent: #3B82F6; --accent-ink: #2563EB; --accent-dim: #EFF6FF; --bad: #DC2626; --warn: #D97706; --good: #059669;
+    --sans: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+    --radius: 14px;
+    --shadow-surface: 0 4px 12px rgba(15, 23, 42, 0.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d0c0a; --bg2: #110f0d; --panel: #17140f; --panel2: #1c1812; --border: #2c2721;
+    --border-soft: #201c17; --text: #f1ece2; --muted: #a89d89; --muted2: #7d7360;
+    --accent: #7b6ff0; --accent-ink: #8f84f5; --accent-dim: #26204d; --bad: #ef7570; --warn: #dfae52; --good: #6fcf97;
+    --shadow-surface: 0 4px 14px rgba(0, 0, 0, 0.4);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); line-height: 1.5; }
+  header {
+    padding: 0 32px; border-bottom: 1px solid var(--border-soft); display: flex;
+    align-items: center; gap: 12px; position: sticky; top: 0; z-index: 10;
+    background: var(--bg2); height: 62px;
+  }
+  header h1 { margin: 0; font-family: var(--sans); font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+  header p { margin: 1px 0 0; color: var(--muted2); font-size: 12px; }
+  header a.back { margin-left: auto; color: var(--muted); font-size: 13px; font-weight: 600; text-decoration: none; }
+  header a.back:hover { color: var(--accent-ink); }
+  main { max-width: 900px; margin: 0 auto; padding: 28px 32px 64px; }
+  h2 { font-size: 18px; margin: 0 0 4px; }
+  .subhead { color: var(--muted); font-size: 13px; margin: 0 0 22px; max-width: 62ch; }
+  .empty {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 28px; text-align: center; color: var(--muted); font-size: 14px;
+  }
+  .queue-item {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px 18px; margin-bottom: 12px; box-shadow: var(--shadow-surface);
+  }
+  .queue-item.resolved { opacity: 0.5; }
+  .queue-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+  .queue-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .tag.priority-high { background: #FEF2F2; color: var(--bad); }
+  .tag.priority-medium { background: #FFFBEB; color: var(--warn); }
+  .tag.priority-low { background: var(--panel2); color: var(--muted); }
+  [data-theme="dark"] .tag.priority-high { background: #3a1414; color: var(--bad); }
+  [data-theme="dark"] .tag.priority-medium { background: #3a3312; color: var(--warn); }
+  .tag.exception { background: #FEF2F2; color: var(--bad); }
+  [data-theme="dark"] .tag.exception { background: #3a1414; color: var(--bad); }
+  .entity { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+  .amount { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .reason { color: var(--muted); font-size: 13px; margin: 8px 0 12px; max-width: 60ch; }
+  .resolve-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  select, button {
+    font-family: var(--sans); font-size: 13px; border-radius: 8px; border: 1px solid var(--border);
+    padding: 7px 10px; background: var(--panel);
+  }
+  button {
+    background: var(--accent-ink); color: #fff; border: none; font-weight: 600; cursor: pointer;
+    padding: 8px 16px;
+  }
+  button:hover:not(:disabled) { background: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #status { color: var(--muted); font-size: 13px; margin-top: 16px; min-height: 18px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Resolve unmatched orders</h1>
+    <p>ReconIQ &middot; queue of exceptions with an available manual match</p>
+  </div>
+  <a class="back" href="/">&larr; Back to dashboard</a>
+</header>
+
+<main>
+  <h2>Unmatched orders</h2>
+  <p class="subhead" id="subhead">
+    Every exception below has an order that couldn't be auto-matched and at least one unclaimed bank
+    line it could plausibly match against. Matching here writes the override back through the same
+    <code>/api/override</code> endpoint and audit trail as the main dashboard &mdash; nothing here is a
+    parallel decision path.
+  </p>
+  <div id="queue"></div>
+  <div id="status"></div>
+</main>
+
+<script>
+const RUN_STORAGE_KEY = "reconiq_current_run";
+const MATERIALITY_STORAGE_KEY = "reconiq_materiality_threshold";
+const DEFAULT_MATERIALITY_THRESHOLD = 5000; // must match backend/app/matcher.py DEFAULT_MATERIALITY_THRESHOLD
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const rupees = (x) => "₹" + Number(x).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
+
+let currentRun = null;
+function loadRun() {
+  try {
+    const raw = localStorage.getItem(RUN_STORAGE_KEY);
+    if (!raw) return false;
+    currentRun = JSON.parse(raw);
+    return !!(currentRun && currentRun.run_id);
+  } catch (e) { return false; }
+}
+function saveRun() {
+  try { localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify(currentRun)); } catch (e) { /* non-fatal */ }
+}
+
+function actionableQueue() {
+  const exceptions = currentRun.exceptions || [];
+  const orphanBankLines = exceptions.filter(e => e.type === "unrecognized_bank_line" && e.bank_line_id);
+  return exceptions
+    .filter(e => e.order_id && orphanBankLines.length)
+    .map(e => ({ ...e, orphanBankLines }))
+    .sort((a, b) => (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3) || (b.amount ?? 0) - (a.amount ?? 0));
+}
+
+function render() {
+  if (!currentRun) {
+    $("subhead").style.display = "none";
+    $("queue").innerHTML = `<div class="empty">
+      No run loaded yet. Run a batch on the main dashboard first, then open this page again
+      &mdash; it reads the same run from this browser (no separate upload or backend state).
+    </div>`;
+    return;
+  }
+  const queue = actionableQueue();
+  if (!queue.length) {
+    $("queue").innerHTML = `<div class="empty">
+      Nothing to resolve right now &mdash; no unmatched order currently has an unclaimed bank line to
+      match against in run ${esc(currentRun.run_id)}.
+    </div>`;
+    return;
+  }
+  $("queue").innerHTML = queue.map(e => `
+    <div class="queue-item" data-order-id="${esc(e.order_id)}">
+      <div class="queue-row">
+        <div>
+          <div class="queue-meta">
+            ${e.priority ? `<span class="tag priority-${esc(e.priority)}">${esc(e.priority)}</span>` : ""}
+            <span class="tag exception">${esc(e.type)}</span>
+            <span class="entity">${esc(e.order_id)}</span>
+            <span class="amount">${typeof e.amount === "number" ? rupees(e.amount) : ""}</span>
+          </div>
+          <div class="reason">${esc(e.reason)}</div>
+        </div>
+      </div>
+      <div class="resolve-controls">
+        <select class="match-select">
+          <option value="">-- pick unclaimed bank line --</option>
+          ${e.orphanBankLines.map(b => `<option value="${esc(b.bank_line_id)}">${rupees(b.amount)} (${esc(b.bank_line_id)})</option>`).join("")}
+        </select>
+        <button class="match-btn">Manually match</button>
+      </div>
+    </div>`).join("");
+}
+
+async function submitOverride(orderId, bankLineId) {
+  $("status").textContent = "Applying override...";
+  try {
+    const res = await fetch("/api/override", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        orders: currentRun.orders, matches: currentRun.matches,
+        exceptions: currentRun.exceptions, audit_trail: currentRun.audit_trail,
+        action: "manual_match", order_id: orderId, bank_line_id: bankLineId,
+        reviewer_note: "Manually matched from the resolve-unmatched-orders dashboard",
+        materiality_threshold: parseFloat(localStorage.getItem(MATERIALITY_STORAGE_KEY)) || DEFAULT_MATERIALITY_THRESHOLD,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `API returned ${res.status}`);
+    }
+    const updated = await res.json();
+    currentRun = { ...currentRun, ...updated };
+    saveRun();
+    render();
+    $("status").textContent = `Matched ${orderId}. Reflected on the main dashboard too.`;
+  } catch (e) {
+    $("status").textContent = "Override failed: " + e.message;
+  }
+}
+
+$("queue").addEventListener("click", (e) => {
+  const btn = e.target.closest(".match-btn");
+  if (!btn) return;
+  const item = btn.closest(".queue-item");
+  const orderId = item.dataset.orderId;
+  const select = item.querySelector(".match-select");
+  const bankLineId = select.value;
+  if (!bankLineId) { $("status").textContent = "Pick a bank line before manually matching."; return; }
+  submitOverride(orderId, bankLineId);
+});
+
+loadRun();
+render();
+</script>
+</body>
+</html>

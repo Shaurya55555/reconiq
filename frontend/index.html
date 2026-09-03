@@ -759,8 +759,15 @@ let currentRun = null; // {run_id, summary, matches, exceptions, audit_trail}
 // localStorage means a refresh restores exactly what the reviewer was
 // looking at, overrides included, without touching that stateless design.
 const RUN_STORAGE_KEY = "reconiq_current_run";
+const MATERIALITY_STORAGE_KEY = "reconiq_materiality_threshold";
 function saveRunToStorage() {
-  try { localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify(currentRun)); } catch (e) { /* private mode, quota, etc. -- non-fatal */ }
+  try {
+    localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify(currentRun));
+    // Also stash the materiality threshold currently in effect -- the resolve
+    // dashboard tab needs this to send overrides that classify exceptions the
+    // same way this page would, not silently against the backend's own default.
+    localStorage.setItem(MATERIALITY_STORAGE_KEY, $("materiality-threshold").value);
+  } catch (e) { /* private mode, quota, etc. -- non-fatal */ }
 }
 function restoreRunFromStorage() {
   try {
@@ -1362,28 +1369,14 @@ function renderExceptionChart(exceptions) {
 
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 
-let focusUnresolvedOnly = false;
-
 function renderExceptions(exceptions) {
   if (!exceptions.length) {
     $("exceptions-table").innerHTML = '<div class="empty">No exceptions in this run.</div>';
     return;
   }
   const orphanBankLines = exceptions.filter(e => e.type === "unrecognized_bank_line" && e.bank_line_id);
-  let sorted = [...exceptions].sort((a, b) =>
+  const sorted = [...exceptions].sort((a, b) =>
     (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3) || (b.amount ?? 0) - (a.amount ?? 0));
-
-  // "Resolve unmatched orders" focus mode reuses this same table/state --
-  // it only narrows to rows that can actually be manually matched right now,
-  // rather than opening a separate queue/view.
-  if (focusUnresolvedOnly) {
-    sorted = sorted.filter(e => e.order_id && orphanBankLines.length);
-    if (!sorted.length) {
-      $("exceptions-table").innerHTML =
-        '<div class="empty">No unmatched orders with an unclaimed bank line to match against right now.</div>';
-      return;
-    }
-  }
 
   const highCount = sorted.filter(e => e.priority === "high").length;
   const top = sorted[0];
@@ -1529,11 +1522,8 @@ $("export-audit-btn").addEventListener("click", () => {
 
 $("focus-unresolved-btn").addEventListener("click", () => {
   if (!currentRun) return;
-  focusUnresolvedOnly = !focusUnresolvedOnly;
-  $("focus-unresolved-btn").textContent = focusUnresolvedOnly ? "Show all exceptions" : "Resolve unmatched orders";
-  $("focus-unresolved-btn").classList.toggle("secondary", !focusUnresolvedOnly);
-  renderExceptions(currentRun.exceptions);
-  $("exceptions-section").scrollIntoView({ behavior: "smooth", block: "start" });
+  saveRunToStorage();
+  window.open("/static/resolve.html", "_blank");
 });
 
 // Event delegation for override controls, since the tables re-render on
@@ -1727,6 +1717,16 @@ if (restoreRunFromStorage()) {
   renderAll(false);
   setStatus(`Restored run ${currentRun.run_id} from your last session.`, false);
 }
+
+// Picks up overrides applied from the resolve-unmatched-orders dashboard
+// tab (RUN_STORAGE_KEY, same origin) without requiring a manual refresh.
+window.addEventListener("storage", (e) => {
+  if (e.key !== RUN_STORAGE_KEY || !e.newValue) return;
+  if (restoreRunFromStorage()) {
+    renderAll(false);
+    setStatus(`Run updated (${currentRun.run_id}) from the resolve-unmatched-orders tab.`, false);
+  }
+});
 </script>
 </body>
 </html>
