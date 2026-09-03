@@ -28,11 +28,25 @@ def test_every_order_is_accounted_for():
 
 
 def test_clean_and_fee_adjusted_orders_match_via_rules_only():
+    """date_shifted is excluded here: data_gen seeds it with a fixed 6-10
+    day settlement drift, always beyond the default date_drift_ok_days=3,
+    and date_drift_ok_days is a hard eligibility boundary (matcher policy),
+    so those orders are expected to land as date_drift_exceeded exceptions,
+    not matches -- see test_date_shifted_orders_become_date_drift_exceptions
+    below."""
     batch, rule_result, _ = run_pipeline()
     rule_matched = {m["order_id"] for m in rule_result["matches"]}
     for order in batch["orders"]:
-        if order["_truth"] in ("clean", "fee_adjusted", "date_shifted"):
+        if order["_truth"] in ("clean", "fee_adjusted"):
             assert order["order_id"] in rule_matched, order["order_id"]
+
+
+def test_date_shifted_orders_become_date_drift_exceptions():
+    batch, _, final = run_pipeline()
+    exception_by_order = {e["order_id"]: e for e in final["exceptions"] if "order_id" in e}
+    for order in batch["orders"]:
+        if order["_truth"] == "date_shifted":
+            assert exception_by_order[order["order_id"]]["type"] == "date_drift_exceeded"
 
 
 def test_missing_settlement_is_an_honest_exception():
@@ -105,10 +119,14 @@ def test_date_drift_is_enforced_even_when_amount_also_differs_by_a_fee():
     arrived well beyond the date-drift policy window skipped that check
     entirely and matched at full 0.9 confidence with no mention of the
     drift -- date_drift_ok_days=3 configured by the reviewer had no effect
-    the moment there was also a small amount difference. Must still match
-    (UTR + a fee-sized difference is still strong evidence) but at reduced
-    confidence, with the drift stated, consistent with the near-exact
-    branch's existing policy."""
+    the moment there was also a small amount difference.
+
+    date_drift_ok_days is a hard eligibility boundary, not a confidence
+    hint (policy decision, 2026): UTR + a fee-sized amount difference is
+    strong evidence the bank line belongs to this settlement, but a
+    settlement outside the reviewer's configured date window must never
+    auto-clear regardless of how good the rest of the evidence is -- it
+    has to surface as an honest date_drift_exceeded exception instead."""
     order = {"order_id": "ORD1", "customer": "Test", "amount": 7200.0,
              "created_at": "2026-09-01T00:00:00", "razorpay_payment_id": "pay_1"}
     settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR1",
@@ -118,11 +136,11 @@ def test_date_drift_is_enforced_even_when_amount_also_differs_by_a_fee():
 
     result = matcher.reconcile([order], [settlement], bank_lines, date_drift_ok_days=3)
 
-    assert len(result["matches"]) == 1
-    match = result["matches"][0]
-    assert match["method"] == "fuzzy"
-    assert match["confidence"] < 0.9  # lower than the non-drifted fuzzy-match confidence
-    assert "drifted" in match["note"]
+    assert not result["matches"]
+    assert len(result["exceptions"]) == 1
+    exc = result["exceptions"][0]
+    assert exc["type"] == "date_drift_exceeded"
+    assert exc["order_id"] == "ORD1"
 
 
 def test_amount_mismatch_claims_its_own_bank_line_instead_of_double_flagging_it():
@@ -515,12 +533,16 @@ def test_data_gen_produces_instant_settlements_that_resolve_cleanly():
 
 
 def test_date_drift_tolerance_changes_classification_not_amount_mismatch_outcome():
-    """date_drift_ok_days should only affect how an exact-amount match is
-    labeled (exact vs fuzzy/date-drifted) -- it must never rescue a
-    genuine amount_mismatch into a match just because that settlement's
-    date drift happens to exceed a tightened threshold. Regression test
-    for a real bug: the date-drift branch used to fire independently of
-    amount closeness.
+    """date_drift_ok_days is a hard eligibility boundary (policy decision,
+    2026): a settlement outside the reviewer's configured window can never
+    auto-clear, no matter how good the rest of the evidence is -- it must
+    surface as a date_drift_exceeded exception instead of a match. So
+    tightening the window can only ever turn matches into exceptions, never
+    the other way around, and loosening it can only recover date-drift
+    exceptions back into matches -- it must never rescue a genuine
+    amount_mismatch, which is an independent, amount-driven exception.
+    Regression test for a real bug: the date-drift branch used to fire
+    independently of amount closeness.
     """
     batch = data_gen.generate_batch(n_orders=150, seed=17)
 
@@ -529,10 +551,8 @@ def test_date_drift_tolerance_changes_classification_not_amount_mismatch_outcome
     lenient = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
                                  date_drift_ok_days=365)
 
-    # total matched count is unaffected -- only exact vs fuzzy labeling shifts
-    assert len(strict["matches"]) == len(lenient["matches"])
-    assert sum(1 for m in strict["matches"] if m["method"] == "exact") \
-        <= sum(1 for m in lenient["matches"] if m["method"] == "exact")
+    # loosening the window can only recover matches, never lose them
+    assert len(strict["matches"]) <= len(lenient["matches"])
 
     amount_mismatch_orders = {o["order_id"] for o in batch["orders"] if o["_truth"] == "amount_mismatch"}
     strict_matched = {m["order_id"] for m in strict["matches"]}
@@ -1038,6 +1058,35 @@ def test_generated_refund_and_partial_refund_orders_resolve_correctly_end_to_end
     assert partial_refund_order_ids, "expected at least one partially refunded order at this seed"
     assert refunded_order_ids <= matched_order_ids
     assert partial_refund_order_ids <= matched_order_ids
+
+
+def test_llm_resolution_source_distinguishes_real_model_output_from_heuristic_fallback():
+    """A "method": "llm" match/exception can come from a genuine model
+    response or from the offline heuristic standing in for one (provider
+    failure, or the batch's time budget running out) -- both used to be
+    labeled identically ("method": "llm"), only distinguishable by grepping
+    free text for a "[...]" prefix. llm_resolution_source makes that a
+    queryable field instead of text a person has to notice, on both the
+    matched and excepted branches."""
+    case = {"order_id": "ORD1", "settlement_id": "stl1", "expected_utr": "UTR1",
+            "expected_amount": 100.0, "utr_seen_in_narration": False}
+    rule_result = {"matches": [], "exceptions": [], "audit_trail": [],
+                    "unmatched_bank_lines": [{"line_id": "bl1", "amount": 100.0}]}
+
+    real_verdict = {"bank_line_id": "bl1", "confidence": 0.95, "reasoning": "narration mentions the exact UTR"}
+    result = matcher.apply_confidence_threshold(rule_result, [(case, real_verdict)], confidence_threshold=0.6)
+    assert result["matches"][0]["llm_resolution_source"] == "llm"
+    assert result["audit_trail"][0]["llm_resolution_source"] == "llm"
+
+    heuristic_verdict = {"bank_line_id": "bl1", "confidence": 0.95, "reasoning": "[heuristic] time budget exhausted"}
+    result = matcher.apply_confidence_threshold(rule_result, [(case, heuristic_verdict)], confidence_threshold=0.6)
+    assert result["matches"][0]["llm_resolution_source"] == "heuristic_fallback"
+    assert result["audit_trail"][0]["llm_resolution_source"] == "heuristic_fallback"
+
+    rule_result_no_bank_line = {"matches": [], "exceptions": [], "audit_trail": [], "unmatched_bank_lines": []}
+    result = matcher.apply_confidence_threshold(rule_result_no_bank_line, [(case, None)], confidence_threshold=0.6)
+    assert result["exceptions"][0]["llm_resolution_source"] == "none"
+    assert result["audit_trail"][0]["llm_resolution_source"] == "none"
 
 
 # ---- confidence-threshold calibration plumbing ----

@@ -19,7 +19,12 @@ from typing import Any
 EXPECTED_OUTCOME = {
     "clean": "matched",
     "fee_adjusted": "matched",
-    "date_shifted": "matched",
+    # date_shifted is generated with a fixed 6-10 day settlement drift
+    # (data_gen.py), always beyond date_drift_ok_days=3 -- date_drift_ok_days
+    # is a hard eligibility boundary (matcher._find_settlement_match), not a
+    # confidence hint, so this must resolve as a date_drift_exceeded
+    # exception, never a match.
+    "date_shifted": "exception",
     "garbled_narration": "matched",
     "duplicate_settlement": "matched",
     "split_settlement": "matched",
@@ -34,6 +39,7 @@ EXPECTED_OUTCOME = {
 EXPECTED_EXCEPTION_TYPE = {
     "missing_settlement": "no_settlement_found",
     "amount_mismatch": "amount_mismatch",
+    "date_shifted": "date_drift_exceeded",
 }
 
 

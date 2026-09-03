@@ -135,32 +135,25 @@ def _find_settlement_match(stl: dict, order: dict, utr_matches: list[dict],
     # comparison just below, not the percentage-based fee tolerance.
     single = next((b for b in utr_matches if abs(b["amount"] - stl["amount"]) <= 0.01), None)
     if single:
+        # date_drift_ok_days is a hard eligibility boundary, not a
+        # confidence hint -- a settlement beyond the policy window is never
+        # auto-matched here regardless of how good the UTR/amount evidence
+        # is. The caller checks for exactly this case (UTR+amount would
+        # otherwise qualify, but date_drift disqualifies it) and raises a
+        # dedicated date_drift_exceeded exception instead of silently
+        # falling through to amount_mismatch or an LLM call -- see
+        # reconcile()'s else branch.
+        if date_drift > date_drift_ok_days:
+            return None
         if amount_diff_pct < 0.001:
-            if date_drift <= date_drift_ok_days:
-                return ("exact", 1.0, "UTR + amount matched exactly", [single["line_id"]])
-            return ("fuzzy", 0.85,
-                    f"UTR + amount matched exactly; settlement date drifted {date_drift}d "
-                    f"beyond the {date_drift_ok_days}d policy window", [single["line_id"]])
+            return ("exact", 1.0, "UTR + amount matched exactly", [single["line_id"]])
         if _within_fee_tolerance(abs(stl["amount"] - order["amount"]), order["amount"] or 1.0,
                                   effective_fee_tolerance_pct):
             tolerance_note = ("within instant-settlement fee tolerance" if stl.get("is_instant")
                                else "within fee tolerance")
-            # date_drift_ok_days was only ever checked in the near-exact-
-            # amount branch above -- a settlement arbitrarily late (weeks,
-            # even) still cleared here at full 0.9 confidence with no
-            # mention of it, the moment the amount also happened to differ
-            # by a plausible fee. UTR + a fee-sized amount difference is
-            # still strong evidence, so this still matches rather than
-            # becoming an exception, but the drift must be visible and
-            # lower confidence, the same policy already applied above.
-            if date_drift <= date_drift_ok_days:
-                return ("fuzzy", 0.9,
-                        f"UTR matched; amount differs by {amount_diff_pct:.1%}, {tolerance_note}",
-                        [single["line_id"]])
-            return ("fuzzy", 0.75,
-                    f"UTR matched; amount differs by {amount_diff_pct:.1%}, {tolerance_note}; "
-                    f"settlement date drifted {date_drift}d beyond the {date_drift_ok_days}d "
-                    "policy window", [single["line_id"]])
+            return ("fuzzy", 0.9,
+                    f"UTR matched; amount differs by {amount_diff_pct:.1%}, {tolerance_note}",
+                    [single["line_id"]])
         # a single line references this UTR but the amount is genuinely
         # wrong -- don't let a lucky group-sum below paper over that below;
         # the caller handles this as amount_mismatch, not a group match.
@@ -509,16 +502,26 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
             match_order, pre, post = _net_refund_for_settlement(order, stl, order_refunds)
             refund_suffix = _refund_suffix(pre, post)
 
-            # A bank line found by this settlement's UTR whose amount is
-            # exactly zero is a distinct, more specific situation than a
-            # generic amount mismatch or an unresolved narration -- usually
-            # a reversed/failed transfer leg on the bank's side, not
-            # ambiguity worth an LLM's time or a vague "amount differs"
-            # framing. Checked before the amount_mismatch/needs_llm split
-            # below so it never gets bucketed as either.
             stl_utr_matches = [b for b in unmatched_bank.values() if stl["utr"] in b["narration"]]
+            # This settlement's own bank line, if UTR-identified and
+            # currency-rounding-close to the settlement's own amount --
+            # used below to decide zero/date-drift/amount_mismatch and to
+            # claim the line so the end-of-pass sweep never double-counts
+            # it as an unrelated orphan.
+            own_bank_line = next((b for b in stl_utr_matches if abs(b["amount"] - stl["amount"]) <= 0.01), None)
             zero_bank_line = next((b for b in stl_utr_matches if b["amount"] == 0), None)
+            date_drift = abs((_parse_date(stl["settled_at"]) - _parse_date(order["created_at"])).days)
+            base_amount = match_order["amount"] or order["amount"] or 1.0
+            amount_diff = abs(stl["amount"] - match_order["amount"])
+            amount_diff_pct = round(amount_diff / base_amount, 6)
+            amount_ok = _within_fee_tolerance(amount_diff, base_amount, fee_tolerance_pct)
+
             if zero_bank_line:
+                # A bank line found by this settlement's UTR whose amount is
+                # exactly zero is a distinct, more specific situation than a
+                # generic amount mismatch or an unresolved narration --
+                # usually a reversed/failed transfer leg on the bank's side,
+                # not ambiguity worth an LLM's time.
                 unmatched_bank.pop(zero_bank_line["line_id"], None)
                 exceptions.append({
                     "type": "zero_amount_bank_line", "order_id": order["order_id"],
@@ -533,57 +536,65 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
                 # below rather than `continue` -- a second candidate
                 # settlement for this payment_id must still be flagged even
                 # when the first one hit a zero-amount bank line.
+            elif own_bank_line and amount_ok and date_drift > date_drift_ok_days:
+                # date_drift_ok_days is a hard eligibility boundary (see
+                # _find_settlement_match): UTR and amount both check out,
+                # but this settlement arrived too late to auto-clear.
+                # Distinct from amount_mismatch (the amount is fine) and
+                # from needs_llm (nothing ambiguous to reason about -- the
+                # date is just outside policy). Claim the bank line for the
+                # same double-counting reason as the other branches here.
+                unmatched_bank.pop(own_bank_line["line_id"], None)
+                exceptions.append({
+                    "type": "date_drift_exceeded", "order_id": order["order_id"],
+                    "settlement_id": stl["settlement_id"],
+                    "reason": f"UTR and amount both correspond to this settlement, but it settled "
+                              f"{date_drift}d after the order{refund_suffix} -- beyond the "
+                              f"{date_drift_ok_days}d policy window, so it cannot auto-clear.",
+                })
+                log("match", "exception", "rule", 1.0,
+                    f"settlement date drifted {date_drift}d beyond the {date_drift_ok_days}d policy window",
+                    order_id=order["order_id"])
+            elif not amount_ok:
+                # amount is genuinely off, not fee-sized -> not an LLM question.
+                # This settlement's own bank line is already fully explained
+                # by this amount_mismatch exception -- claim it now so the
+                # end-of-pass sweep doesn't ALSO flag it as an unrelated
+                # unrecognized_bank_line, double-counting the same money as
+                # two separate risk line items in amount_at_risk.
+                if own_bank_line:
+                    unmatched_bank.pop(own_bank_line["line_id"], None)
+                exceptions.append({
+                    "type": "amount_mismatch", "order_id": order["order_id"],
+                    "settlement_id": stl["settlement_id"],
+                    "reason": f"Settlement amount {stl['amount']} differs from order "
+                              f"amount {order['amount']}{refund_suffix} by {amount_diff_pct:.1%}, "
+                              "outside plausible Razorpay fee range.",
+                })
+                log("match", "exception", "rule", 1.0,
+                    "amount diff exceeds fee tolerance", order_id=order["order_id"])
             else:
-                # Same float-noise guard as _find_settlement_match's identical
-                # comparison -- see the comment there.
-                base_amount = match_order["amount"] or order["amount"] or 1.0
-                amount_diff = abs(stl["amount"] - match_order["amount"])
-                amount_diff_pct = round(amount_diff / base_amount, 6)
-                if not _within_fee_tolerance(amount_diff, base_amount, fee_tolerance_pct):
-                    # amount is genuinely off, not fee-sized -> not an LLM question
-                    # This settlement's own bank line (found by UTR, currency-
-                    # rounding-close to the settlement's own amount) is already
-                    # fully explained by this amount_mismatch exception -- claim
-                    # it now so the end-of-pass sweep doesn't ALSO flag it as an
-                    # unrelated unrecognized_bank_line, double-counting the same
-                    # money as two separate risk line items in amount_at_risk.
-                    own_bank_line = next((b for b in stl_utr_matches if abs(b["amount"] - stl["amount"]) <= 0.01), None)
-                    if own_bank_line:
-                        unmatched_bank.pop(own_bank_line["line_id"], None)
-                    exceptions.append({
-                        "type": "amount_mismatch", "order_id": order["order_id"],
-                        "settlement_id": stl["settlement_id"],
-                        "reason": f"Settlement amount {stl['amount']} differs from order "
-                                  f"amount {order['amount']}{refund_suffix} by {amount_diff_pct:.1%}, "
-                                  "outside plausible Razorpay fee range.",
-                    })
-                    log("match", "exception", "rule", 1.0,
-                        "amount diff exceeds fee tolerance", order_id=order["order_id"])
-                else:
-                    # amount lines up with what we'd expect, but this settlement's
-                    # UTR wasn't found verbatim in any remaining bank line -> the
-                    # narration is garbled/truncated. Free-text reasoning territory.
-                    needs_llm.append({
-                        "order_id": order["order_id"], "settlement_id": stl["settlement_id"],
-                        "expected_utr": stl["utr"], "expected_amount": stl["amount"],
-                        # cosmetic LLM-prompt context only, not part of
-                        # REQUIRED_ORDER_FIELDS -- uploaded orders.csv from a
-                        # real user has no reason to include it
-                        "customer": order.get("customer", "unknown"),
-                        # utr_matches here can be non-empty: a bank line's
-                        # narration can contain this exact UTR while still
-                        # being disqualified (wrong amount, e.g. a reversal
-                        # line). The final exception text must not claim the
-                        # UTR was "not found" when it plainly was -- that's
-                        # exactly the kind of overclaim this project exists
-                        # to avoid making. stl_utr_matches (not the outer
-                        # loop's utr_matches, which reflects whichever
-                        # candidate was tried last and may not be `stl`) is
-                        # freshly computed above for this exact settlement.
-                        "utr_seen_in_narration": bool(stl_utr_matches),
-                    })
-                    log("match", "deferred_to_llm", "rule", 0.0,
-                        "settlement UTR not found verbatim in any bank line", order_id=order["order_id"])
+                # amount lines up with what we'd expect, but this settlement's
+                # UTR wasn't found verbatim in any remaining bank line -> the
+                # narration is garbled/truncated. Free-text reasoning territory.
+                needs_llm.append({
+                    "order_id": order["order_id"], "settlement_id": stl["settlement_id"],
+                    "expected_utr": stl["utr"], "expected_amount": stl["amount"],
+                    # cosmetic LLM-prompt context only, not part of
+                    # REQUIRED_ORDER_FIELDS -- uploaded orders.csv from a
+                    # real user has no reason to include it
+                    "customer": order.get("customer", "unknown"),
+                    # stl_utr_matches can be non-empty: a bank line's
+                    # narration can contain this exact UTR while still
+                    # being disqualified (wrong amount, e.g. a reversal
+                    # line). The final exception text must not claim the
+                    # UTR was "not found" when it plainly was -- that's
+                    # exactly the kind of overclaim this project exists
+                    # to avoid making.
+                    "utr_seen_in_narration": bool(stl_utr_matches),
+                })
+                log("match", "deferred_to_llm", "rule", 0.0,
+                    "settlement UTR not found verbatim in any bank line", order_id=order["order_id"])
 
         if len(candidate_settlements) > 1:
             # `stl` here is whichever settlement was actually used above (the
@@ -727,6 +738,24 @@ def apply_llm_resolutions(rule_result: dict, llm_resolve_fn,
     return apply_confidence_threshold(rule_result, case_verdicts, confidence_threshold)
 
 
+def _llm_resolution_source(verdict: dict | None) -> str:
+    """A "method": "llm" match/exception can come from a genuine model
+    response, or from the offline heuristic standing in for one (a
+    provider call failure, or the whole batch's time budget running out --
+    see resolve_llm_verdicts and llm_resolver.resolve). Both cases were
+    only ever distinguishable by grepping the free-text reasoning for a
+    "[...]" prefix, which made a timeout fallback look identical to
+    successful AI reasoning at the method/summary level -- exactly the
+    kind of thing this project's audit trail exists to not obscure. Both
+    fallback paths already tag their reasoning with a "[...]" prefix by
+    convention; this reads that same signal into a queryable field instead
+    of leaving it as text a person has to notice.
+    """
+    if not verdict:
+        return "none"
+    return "heuristic_fallback" if verdict.get("reasoning", "").startswith("[") else "llm"
+
+
 def apply_confidence_threshold(rule_result: dict, case_verdicts: list[tuple[dict, dict | None]],
                                 confidence_threshold: float = DEFAULT_LLM_CONFIDENCE_THRESHOLD) -> dict:
     """Apply one accept/reject bar to a set of already-computed LLM verdicts.
@@ -739,17 +768,19 @@ def apply_confidence_threshold(rule_result: dict, case_verdicts: list[tuple[dict
     unmatched_bank = {b["line_id"]: b for b in rule_result["unmatched_bank_lines"]}
 
     for case, verdict in case_verdicts:
+        resolution_source = _llm_resolution_source(verdict)
         if verdict and verdict.get("bank_line_id") in unmatched_bank and verdict.get("confidence", 0) >= confidence_threshold:
             bank_hit = unmatched_bank.pop(verdict["bank_line_id"])
             matches.append({
                 "order_id": case["order_id"], "settlement_id": case["settlement_id"],
                 "bank_line_id": bank_hit["line_id"], "method": "llm",
                 "confidence": verdict["confidence"], "note": verdict["reasoning"],
+                "llm_resolution_source": resolution_source,
             })
             audit.append({
                 "step": "llm_resolve", "decision": "matched", "method": "llm",
                 "confidence": verdict["confidence"], "note": verdict["reasoning"],
-                "order_id": case["order_id"],
+                "order_id": case["order_id"], "llm_resolution_source": resolution_source,
             })
         else:
             reason = (verdict or {}).get("reasoning", "LLM resolver returned no confident candidate")
@@ -763,11 +794,12 @@ def apply_confidence_threshold(rule_result: dict, case_verdicts: list[tuple[dict
                 "type": "unrecognized_narration", "order_id": case["order_id"],
                 "settlement_id": case["settlement_id"],
                 "reason": f"{utr_clause}; LLM could not confidently resolve it either. {reason}",
+                "llm_resolution_source": resolution_source,
             })
             audit.append({
                 "step": "llm_resolve", "decision": "exception", "method": "llm",
                 "confidence": (verdict or {}).get("confidence", 0.0), "note": reason,
-                "order_id": case["order_id"],
+                "order_id": case["order_id"], "llm_resolution_source": resolution_source,
             })
 
     for bank_line_id, bl in unmatched_bank.items():
