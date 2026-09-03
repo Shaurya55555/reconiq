@@ -1523,7 +1523,7 @@ $("export-audit-btn").addEventListener("click", () => {
 $("focus-unresolved-btn").addEventListener("click", () => {
   if (!currentRun) return;
   saveRunToStorage();
-  window.open("/static/resolve.html", "_blank");
+  window.location.href = "/static/resolve.html";
 });
 
 // Event delegation for override controls, since the tables re-render on

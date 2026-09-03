@@ -77,6 +77,108 @@
   button:hover:not(:disabled) { background: var(--accent); }
   button:disabled { opacity: 0.5; cursor: default; }
   #status { color: var(--muted); font-size: 13px; margin-top: 16px; min-height: 18px; }
+
+  /* Chat assistant -- same widget as the main dashboard so a reviewer
+     working this queue can still ask about the run without switching tabs. */
+  :root { --chat-gradient: linear-gradient(135deg, #06B6D4, #2563EB); }
+  #chat-fab {
+    display: flex; position: fixed; bottom: 24px; right: 24px; z-index: 90;
+    align-items: center; gap: 8px; padding: 13px 20px; border-radius: 999px;
+    background: var(--chat-gradient); box-shadow: 0 8px 20px rgba(37,99,235,0.32);
+    color: #fff; font-weight: 600; font-size: 14px; border: none; cursor: pointer;
+  }
+  #chat-fab:hover:not(:disabled) { background: var(--chat-gradient); filter: brightness(1.05); }
+  #chat-panel {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(380px, 92vw);
+    background: var(--panel); border-left: 1px solid var(--border); z-index: 91;
+    box-shadow: -8px 0 24px rgba(15,23,42,0.12);
+    display: flex; flex-direction: column;
+    transform: translateX(100%); transition: transform 0.2s ease;
+  }
+  #chat-panel.open { transform: translateX(0); }
+  #chat-panel-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 16px 20px; border-bottom: 1px solid var(--border-soft); flex-shrink: 0;
+    background: var(--panel2);
+  }
+  .chat-header-identity { display: flex; align-items: center; gap: 10px; }
+  .chat-icon-chip {
+    width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0;
+    background: linear-gradient(135deg, rgba(6,182,212,0.16), rgba(37,99,235,0.16));
+    border: 1px solid rgba(37,99,235,0.18);
+    display: flex; align-items: center; justify-content: center; color: var(--accent-ink);
+  }
+  #chat-panel-header h3 { margin: 0; font-size: 13.5px; font-weight: 700; letter-spacing: -0.01em; }
+  .chat-header-status { display: block; font-size: 10.5px; color: var(--accent-ink); font-weight: 600; margin-top: 1px; }
+  #chat-panel-close {
+    padding: 6px; font-size: 13px; width: 28px; height: 28px; display: flex;
+    align-items: center; justify-content: center; border-radius: 8px;
+    background: var(--panel); color: var(--text); border: 1px solid var(--border); cursor: pointer;
+  }
+  #chat-panel-body { padding: 16px 20px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 14px; }
+  #chat-panel-footer { padding: 14px 20px; border-top: 1px solid var(--border-soft); flex-shrink: 0; background: var(--panel2); }
+  .chat-input-wrap {
+    display: flex; align-items: flex-end; gap: 8px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 14px; padding: 6px 6px 6px 14px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .chat-input-wrap:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+  #chat-input {
+    flex: 1; min-width: 0; border: none; background: transparent; padding: 8px 0;
+    font-family: var(--sans); font-size: 13.5px; color: var(--text);
+  }
+  #chat-input:focus { outline: none; box-shadow: none; }
+  #chat-btn {
+    flex-shrink: 0; width: 34px; height: 34px; padding: 0; border-radius: 10px;
+    background: var(--chat-gradient); display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 6px rgba(37,99,235,0.3); border: none; cursor: pointer; color: #fff;
+  }
+  #chat-btn:hover:not(:disabled) { background: var(--chat-gradient); filter: brightness(1.08); }
+  #chat-btn:disabled { background: var(--border); box-shadow: none; }
+  .chat-hint { font-size: 10.5px; color: var(--muted2); margin: 8px 2px 0; text-transform: uppercase; letter-spacing: 0.04em; }
+  .chat-empty { display: flex; flex-direction: column; align-items: flex-start; padding: 12px 2px; }
+  .chat-empty-icon {
+    width: 44px; height: 44px; border-radius: 14px; margin-bottom: 14px;
+    background: linear-gradient(135deg, rgba(6,182,212,0.14), rgba(37,99,235,0.14));
+    border: 1px solid rgba(37,99,235,0.18);
+    display: flex; align-items: center; justify-content: center; color: var(--accent-ink);
+  }
+  .chat-empty h4 { margin: 0 0 6px; font-size: 14.5px; font-weight: 700; }
+  .chat-empty p { margin: 0 0 16px; font-size: 12.5px; color: var(--muted); line-height: 1.5; max-width: 30ch; }
+  .chat-suggestions { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+  .chat-suggestion-btn {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px; text-align: left;
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 12px;
+    cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; font-family: var(--sans);
+  }
+  .chat-suggestion-btn:hover { border-color: var(--accent); background: var(--accent-dim); }
+  .chat-suggestion-btn .chip {
+    width: 24px; height: 24px; border-radius: 7px; flex-shrink: 0; background: var(--panel);
+    border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; color: var(--accent-ink);
+  }
+  .chat-suggestion-btn span.label { font-size: 12.5px; color: var(--text); font-weight: 500; }
+  .chat-msg-row { display: flex; gap: 8px; align-items: flex-start; }
+  .chat-msg-row.user { flex-direction: row-reverse; }
+  .chat-avatar {
+    width: 24px; height: 24px; border-radius: 999px; flex-shrink: 0; margin-top: 2px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .chat-avatar.bot {
+    background: linear-gradient(135deg, rgba(6,182,212,0.16), rgba(37,99,235,0.16));
+    border: 1px solid rgba(37,99,235,0.18); color: var(--accent-ink);
+  }
+  .chat-avatar.user { background: var(--accent-dim); color: var(--accent-ink); }
+  .chat-bubble { padding: 9px 13px; border-radius: 16px; font-size: 13px; line-height: 1.5; max-width: 84%; }
+  .chat-msg-row.user .chat-bubble { background: var(--accent-ink); color: #fff; border-top-right-radius: 4px; }
+  .chat-msg-row.bot .chat-bubble { background: var(--panel2); border: 1px solid var(--border); color: var(--text); border-top-left-radius: 4px; }
+  .chat-thinking-dots { display: inline-flex; gap: 4px; align-items: center; }
+  .chat-thinking-dots span {
+    width: 5px; height: 5px; border-radius: 999px; background: var(--accent-ink);
+    animation: chat-bounce 1s infinite ease-in-out;
+  }
+  .chat-thinking-dots span:nth-child(2) { animation-delay: 0.15s; }
+  .chat-thinking-dots span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes chat-bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.5; } 30% { transform: translateY(-3px); opacity: 1; } }
 </style>
 </head>
 <body>
@@ -100,6 +202,47 @@
   <div id="queue"></div>
   <div id="status"></div>
 </main>
+
+<button id="chat-fab" title="Ask about this run">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 3l1.8 4.4L18 9l-4.2 1.6L12 15l-1.8-4.4L6 9l4.2-1.6L12 3z"/>
+    <path d="M19 14l0.9 2.1L22 17l-2.1 0.9L19 20l-0.9-2.1L16 17l2.1-0.9L19 14z"/>
+  </svg>
+  Ask
+</button>
+<div id="chat-panel">
+  <div id="chat-panel-header">
+    <div class="chat-header-identity">
+      <div class="chat-icon-chip">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="7" width="18" height="13" rx="3"/>
+          <path d="M12 7V3m-4 0h8"/>
+          <circle cx="8.5" cy="13.5" r="1.2" fill="currentColor" stroke="none"/>
+          <circle cx="15.5" cy="13.5" r="1.2" fill="currentColor" stroke="none"/>
+        </svg>
+      </div>
+      <div>
+        <h3>ReconIQ Assistant</h3>
+        <span class="chat-header-status" id="chat-header-status" style="display:none">Thinking&hellip;</span>
+      </div>
+    </div>
+    <button id="chat-panel-close" title="Close">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>
+    </button>
+  </div>
+  <div id="chat-panel-body">
+    <div id="chat-log"></div>
+  </div>
+  <div id="chat-panel-footer">
+    <div class="chat-input-wrap">
+      <input id="chat-input" type="text" placeholder="Ask about this run&hellip;">
+      <button id="chat-btn" title="Send">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+      </button>
+    </div>
+    <p class="chat-hint">Enter to send</p>
+  </div>
+</div>
 
 <script>
 const RUN_STORAGE_KEY = "reconiq_current_run";
@@ -209,6 +352,120 @@ $("queue").addEventListener("click", (e) => {
   if (!bankLineId) { $("status").textContent = "Pick a bank line before manually matching."; return; }
   submitOverride(orderId, bankLineId);
 });
+
+// Chat assistant -- identical behavior to the main dashboard's, answering
+// from this same run's data via /api/ask.
+function openChatPanel() {
+  $("chat-panel").classList.add("open");
+  if (!$("chat-log").children.length) renderChatEmptyState();
+  $("chat-input").focus();
+}
+function closeChatPanel() { $("chat-panel").classList.remove("open"); }
+function toggleChatPanel() {
+  $("chat-panel").classList.contains("open") ? closeChatPanel() : openChatPanel();
+}
+
+const CHAT_SUGGESTIONS = [
+  { text: "Can I close the books?", icon: '<path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/>' },
+  { text: "Does the AI actually help here?", icon: '<path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/>' },
+  { text: "How many exceptions, and why?", icon: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L2.5 18a2 2 0 001.7 3h15.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/>' },
+];
+
+function renderChatEmptyState() {
+  $("chat-log").innerHTML = `
+    <div class="chat-empty">
+      <div class="chat-empty-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="7" width="18" height="13" rx="3"/><path d="M12 7V3m-4 0h8"/>
+          <circle cx="8.5" cy="13.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="15.5" cy="13.5" r="1.2" fill="currentColor" stroke="none"/>
+        </svg>
+      </div>
+      <h4>How can I help?</h4>
+      <p>Ask about this run's matches, exceptions, or the closing verdict &mdash; answered from this batch's own data, not a general chatbot.</p>
+      <div class="chat-suggestions">
+        ${CHAT_SUGGESTIONS.map(s => `
+          <button class="chat-suggestion-btn" data-suggestion="${esc(s.text)}">
+            <span class="chip"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${s.icon}</svg></span>
+            <span class="label">${esc(s.text)}</span>
+          </button>`).join("")}
+      </div>
+    </div>`;
+}
+
+const CHAT_BOT_AVATAR_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3" y="7" width="18" height="13" rx="3"/><path d="M12 7V3m-4 0h8"/>
+  <circle cx="8.5" cy="13.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="15.5" cy="13.5" r="1.2" fill="currentColor" stroke="none"/></svg>`;
+const CHAT_USER_AVATAR_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>`;
+
+function appendChatMessage(role, text) {
+  if ($("chat-log").querySelector(".chat-empty")) $("chat-log").innerHTML = "";
+  const row = document.createElement("div");
+  row.className = `chat-msg-row ${role}`;
+  row.innerHTML = `
+    <div class="chat-avatar ${role === "user" ? "user" : "bot"}">${role === "user" ? CHAT_USER_AVATAR_SVG : CHAT_BOT_AVATAR_SVG}</div>
+    <div class="chat-bubble">${esc(text)}</div>`;
+  $("chat-log").appendChild(row);
+  $("chat-panel-body").scrollTop = $("chat-panel-body").scrollHeight;
+  return row;
+}
+
+function showChatThinking() {
+  if ($("chat-log").querySelector(".chat-empty")) $("chat-log").innerHTML = "";
+  const row = document.createElement("div");
+  row.className = "chat-msg-row bot";
+  row.id = "chat-thinking-row";
+  row.innerHTML = `
+    <div class="chat-avatar bot">${CHAT_BOT_AVATAR_SVG}</div>
+    <div class="chat-bubble chat-thinking-dots"><span></span><span></span><span></span></div>`;
+  $("chat-log").appendChild(row);
+  $("chat-panel-body").scrollTop = $("chat-panel-body").scrollHeight;
+  $("chat-header-status").style.display = "";
+}
+function hideChatThinking() {
+  const row = $("chat-thinking-row");
+  if (row) row.remove();
+  $("chat-header-status").style.display = "none";
+}
+
+$("chat-log").addEventListener("click", (e) => {
+  const btn = e.target.closest(".chat-suggestion-btn");
+  if (!btn) return;
+  $("chat-input").value = btn.dataset.suggestion;
+  askQuestion();
+});
+
+async function askQuestion() {
+  const q = $("chat-input").value.trim();
+  if (!q || !currentRun) return;
+  appendChatMessage("user", q);
+  $("chat-input").value = "";
+  $("chat-btn").disabled = true;
+  showChatThinking();
+  try {
+    const res = await fetch("/api/ask", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question: q, summary: currentRun.summary, exceptions: currentRun.exceptions, matches: currentRun.matches,
+        verdict: currentRun.verdict, rules_only_summary: currentRun.rules_only_summary,
+      }),
+    });
+    const data = await res.json();
+    hideChatThinking();
+    appendChatMessage("bot", data.answer);
+  } catch (e) {
+    hideChatThinking();
+    appendChatMessage("bot", "Sorry, that request failed: " + e.message);
+  } finally {
+    $("chat-btn").disabled = false;
+  }
+}
+
+$("chat-fab").addEventListener("click", toggleChatPanel);
+$("chat-panel-close").addEventListener("click", closeChatPanel);
+$("chat-btn").addEventListener("click", askQuestion);
+$("chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") askQuestion(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeChatPanel(); });
 
 loadRun();
 render();
