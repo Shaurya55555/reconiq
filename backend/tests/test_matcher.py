@@ -64,6 +64,55 @@ def test_exact_fee_boundary_resolves_consistently_regardless_of_float_noise():
         assert result["matches"][0]["method"] == "fuzzy"
 
 
+def test_date_drift_is_enforced_even_when_amount_also_differs_by_a_fee():
+    """Regression test: date_drift_ok_days was only ever checked in the
+    near-exact-amount branch of _find_settlement_match. A settlement that
+    both (a) differs from the order amount by a plausible fee AND (b)
+    arrived well beyond the date-drift policy window skipped that check
+    entirely and matched at full 0.9 confidence with no mention of the
+    drift -- date_drift_ok_days=3 configured by the reviewer had no effect
+    the moment there was also a small amount difference. Must still match
+    (UTR + a fee-sized difference is still strong evidence) but at reduced
+    confidence, with the drift stated, consistent with the near-exact
+    branch's existing policy."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 7200.0,
+             "created_at": "2026-09-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR1",
+                  "amount": 6984.0, "settled_at": "2026-09-07"}  # 6 days out, amount ~3% off
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR1-RAZORPAY",
+                   "amount": 6984.0, "value_date": "2026-09-07"}]
+
+    result = matcher.reconcile([order], [settlement], bank_lines, date_drift_ok_days=3)
+
+    assert len(result["matches"]) == 1
+    match = result["matches"][0]
+    assert match["method"] == "fuzzy"
+    assert match["confidence"] < 0.9  # lower than the non-drifted fuzzy-match confidence
+    assert "drifted" in match["note"]
+
+
+def test_amount_mismatch_claims_its_own_bank_line_instead_of_double_flagging_it():
+    """Regression test: when a settlement's own bank line is found (by UTR,
+    currency-rounding-close to the settlement's amount) but the settlement
+    doesn't match the order within fee tolerance, that bank line used to
+    stay in the unmatched pool and get its OWN unrecognized_bank_line
+    exception later -- double-counting the same money as two separate
+    amount_at_risk line items (amount_mismatch's order amount, plus the
+    bank line's own amount) when it's really one reconciliation failure."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 10000.0,
+             "created_at": "2026-09-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR1",
+                  "amount": 9699.0, "settled_at": "2026-09-03"}  # 3.01% off -- outside tolerance
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR1-RAZORPAY",
+                   "amount": 9699.0, "value_date": "2026-09-03"}]
+
+    result = matcher.reconcile([order], [settlement], bank_lines)
+    assert result["unmatched_bank_lines"] == []  # claimed by the amount_mismatch above, not left dangling
+
+    final = matcher.apply_llm_resolutions(result, llm_resolve_fn=None)
+    assert [e["type"] for e in final["exceptions"]] == ["amount_mismatch"]
+
+
 def test_amount_mismatch_is_flagged_not_silently_matched():
     batch, _, final = run_pipeline()
     matched_orders = {m["order_id"] for m in final["matches"]}
@@ -229,21 +278,21 @@ def test_unrecognized_bank_line_reports_a_positive_exposure_even_for_an_outbound
 def test_amount_matched_sums_only_matched_orders():
     """A refunded (method="refunded") order contributes zero net settlement
     money even though it's matched -- nothing settled for it. A
-    partial-refund order contributes order.amount minus its refund, not
-    the raw order amount -- that's genuinely what settled."""
+    pre-settlement-refund order contributes order.amount minus its
+    *pre-settlement* refund -- a post-settlement refund never reduces this
+    figure (the settlement was genuinely legitimate at full value; see
+    reconcile()'s pre_settlement_refund field on each match, which is the
+    authoritative source summarize() must use here -- not every refund on
+    the payment_id regardless of timing)."""
     batch, _, final = run_pipeline(n_orders=50, seed=3)
     summary = matcher.summarize(batch["orders"], final, refunds=batch["refunds"])
     amount_by_id = {o["order_id"]: o["amount"] for o in batch["orders"]}
-    payment_id_by_order_id = {o["order_id"]: o["razorpay_payment_id"] for o in batch["orders"]}
-    refund_by_payment: dict[str, float] = {}
-    for r in batch["refunds"]:
-        refund_by_payment[r["payment_id"]] = refund_by_payment.get(r["payment_id"], 0.0) + r["amount"]
 
     expected = 0.0
     for m in final["matches"]:
         if m["method"] == "refunded":
             continue
-        refund = refund_by_payment.get(payment_id_by_order_id[m["order_id"]], 0.0)
+        refund = m.get("pre_settlement_refund", 0.0)
         expected += max(amount_by_id[m["order_id"]] - refund, 0.0)
     assert summary["total_amount_matched"] == round(expected, 2)
 
@@ -1297,16 +1346,18 @@ def test_over_refund_adds_only_the_excess_to_amount_at_risk_not_the_whole_order(
     its own excess, not double-count the whole (already-matched,
     already-safe) order amount on top.
 
-    (total_amount_matched nets any refund total against the order amount,
-    floored at 0 -- an existing, separate netting rule this test doesn't
-    change -- so it's legitimately 0.0 here since the refund exceeds the
-    order; the fix under test is what happens to total_amount_at_risk.)
+    (total_amount_matched only nets a *pre*-settlement refund against the
+    order amount -- _order_settlement_bank's default refund is dated
+    *after* settled_at, so it's a post-settlement refund and must NOT
+    reduce total_amount_matched: the settlement was genuinely legitimate
+    at its full amount, exactly what its own match note says. The fix
+    under test here is what happens to total_amount_at_risk.)
     """
     order, settlement, bank_lines, refund = _order_settlement_bank(1000.0, 1500.0)
     result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])
     summary = matcher.summarize([order], result, refunds=[refund], refund_matches=result["refund_matches"])
 
-    assert summary["total_amount_matched"] == 0.0
+    assert summary["total_amount_matched"] == 1000.0  # post-settlement refund never nets
     assert summary["total_amount_at_risk"] == 500.0  # the excess only, not 500 + 1000
 
 

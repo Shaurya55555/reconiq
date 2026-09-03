@@ -129,9 +129,22 @@ def _find_settlement_match(stl: dict, order: dict, utr_matches: list[dict],
         if amount_diff_pct <= effective_fee_tolerance_pct:
             tolerance_note = ("within instant-settlement fee tolerance" if stl.get("is_instant")
                                else "within fee tolerance")
-            return ("fuzzy", 0.9,
-                    f"UTR matched; amount differs by {amount_diff_pct:.1%}, {tolerance_note}",
-                    [single["line_id"]])
+            # date_drift_ok_days was only ever checked in the near-exact-
+            # amount branch above -- a settlement arbitrarily late (weeks,
+            # even) still cleared here at full 0.9 confidence with no
+            # mention of it, the moment the amount also happened to differ
+            # by a plausible fee. UTR + a fee-sized amount difference is
+            # still strong evidence, so this still matches rather than
+            # becoming an exception, but the drift must be visible and
+            # lower confidence, the same policy already applied above.
+            if date_drift <= date_drift_ok_days:
+                return ("fuzzy", 0.9,
+                        f"UTR matched; amount differs by {amount_diff_pct:.1%}, {tolerance_note}",
+                        [single["line_id"]])
+            return ("fuzzy", 0.75,
+                    f"UTR matched; amount differs by {amount_diff_pct:.1%}, {tolerance_note}; "
+                    f"settlement date drifted {date_drift}d beyond the {date_drift_ok_days}d "
+                    "policy window", [single["line_id"]])
         # a single line references this UTR but the amount is genuinely
         # wrong -- don't let a lucky group-sum below paper over that below;
         # the caller handles this as amount_mismatch, not a group match.
@@ -462,6 +475,14 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
                 "order_id": order["order_id"], "settlement_id": stl["settlement_id"],
                 "bank_line_id": bank_line_ids[0], "bank_line_ids": bank_line_ids,
                 "method": method, "confidence": confidence, "note": note + refund_suffix,
+                # summarize() needs the *actual* pre-settlement refund netted
+                # here, not every refund on this payment_id regardless of
+                # timing -- a post-settlement refund is explicitly "not
+                # netted against this settlement" in `note` above, but
+                # summarize() had no way to know that and subtracted the
+                # full refund total anyway, understating amount reconciled
+                # for a settlement its own match note says is legitimate.
+                "pre_settlement_refund": picked_pre,
             })
             resolved_settlement_ids.add(stl["settlement_id"])
             for bank_line_id in bank_line_ids:
@@ -477,6 +498,16 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
                 abs(stl["amount"] - match_order["amount"]) / (match_order["amount"] or order["amount"] or 1.0), 6)
             if amount_diff_pct > fee_tolerance_pct:
                 # amount is genuinely off, not fee-sized -> not an LLM question
+                # This settlement's own bank line (found by UTR, currency-
+                # rounding-close to the settlement's own amount) is already
+                # fully explained by this amount_mismatch exception -- claim
+                # it now so the end-of-pass sweep doesn't ALSO flag it as an
+                # unrelated unrecognized_bank_line, double-counting the same
+                # money as two separate risk line items in amount_at_risk.
+                stl_utr_matches = [b for b in unmatched_bank.values() if stl["utr"] in b["narration"]]
+                own_bank_line = next((b for b in stl_utr_matches if abs(b["amount"] - stl["amount"]) <= 0.01), None)
+                if own_bank_line:
+                    unmatched_bank.pop(own_bank_line["line_id"], None)
                 exceptions.append({
                     "type": "amount_mismatch", "order_id": order["order_id"],
                     "settlement_id": stl["settlement_id"],
@@ -809,7 +840,14 @@ def summarize(orders: list[dict], result: dict, refunds: list[dict] | None = Non
     total_amount_matched = 0.0
     for m in result["matches"]:
         order_amount = amount_by_order_id.get(m["order_id"], 0.0)
-        refund_amount = refund_total_by_order_id.get(m["order_id"], 0.0)
+        # Prefer the exact pre-settlement-refund figure reconcile() already
+        # computed for this specific match (exact/fuzzy/group_split all set
+        # it) -- it correctly excludes a post-settlement refund, which
+        # doesn't reduce what this settlement was expected to pay out.
+        # Falling back to "every refund on this payment_id" only for match
+        # types that don't set it yet (batch_settlement, llm) -- not a fix
+        # for those, just not a regression from previous behavior there.
+        refund_amount = m.get("pre_settlement_refund", refund_total_by_order_id.get(m["order_id"], 0.0))
         if m["method"] == "refunded":
             continue  # fully refunded -- zero net settlement money, correctly excluded
         total_amount_matched += max(round(order_amount - refund_amount, 2), 0.0)
