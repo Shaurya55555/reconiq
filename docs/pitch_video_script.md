@@ -157,7 +157,7 @@ Stop. Don't use the last 30 seconds to list technologies.
 - If a live LLM call is slow during recording, that's fine to leave in
   — it's honest (a real network call, not a canned demo) — but don't let
   dead air run past ~3 seconds; talk over it.
-- **If the live Gemini call fails on camera** (rate limit, transient
+- **If the live Groq call fails on camera** (rate limit, transient
   503), the offline heuristic fallback still produces a labeled,
   reasonable result — don't panic-cut. That graceful degradation is
   itself worth having happen on camera if it does; it's a real answer
@@ -165,5 +165,8 @@ Stop. Don't use the last 30 seconds to list technologies.
 - First take will likely run 6–7 minutes. Cut kit, in order: trim the
   second "Why?" click in the 2:15–3:00 section first; if still over,
   shorten the architecture beat at 0:30–1:00 to a single sentence.
-- Do the dry run early enough (not minutes before recording) that a
-  Gemini free-tier rate limit from testing has time to clear.
+- Do the dry run early enough (not minutes before recording) that any
+  provider rate limit from testing has time to clear.
+- The header shows "LLM layer: groq" — if you narrate the AI step, say
+  "the LLM layer" rather than naming a specific provider by name, so
+  the script doesn't go stale again if the provider ever changes.
