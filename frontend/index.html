@@ -1390,7 +1390,7 @@ function renderExceptions(exceptions) {
     const reviewCell = (e.order_id && orphanBankLines.length)
       ? `<select class="secondary manual-match-select" data-order-id="${esc(e.order_id)}">
            <option value="">-- pick unclaimed bank line --</option>
-           ${orphanBankLines.map(b => `<option value="${esc(b.bank_line_id)}">${rupees(b.amount)} (${esc(b.bank_line_id)})</option>`).join("")}
+           ${orphanBankLines.map(b => `<option value="${esc(b.bank_line_id)}" data-amount="${b.amount}">${rupees(b.amount)} (${esc(b.bank_line_id)})</option>`).join("")}
          </select>
          <button class="secondary manual-match-btn" data-order-id="${esc(e.order_id)}">Manually match</button>`
       : "";
@@ -1537,6 +1537,27 @@ $("matches-table").addEventListener("click", (e) => {
   if (whyBtn) { showEvidence(whyBtn.dataset.orderId, null); return; }
 });
 
+// A manual match has no automated amount check at all (apply_override just
+// records whatever bank line the reviewer picked) -- so this is the one
+// place in the app that could silently assert a wrong pairing. Bake any
+// material amount gap into the audit note instead of staying silent about
+// it; this doesn't block the match (a genuine batched/split settlement can
+// legitimately not equal the order amount), it just makes sure the audit
+// trail honestly records what the reviewer was looking at.
+function manualMatchNote(orderId, select) {
+  const base = "Manually matched by reviewer after checking bank portal.";
+  const order = findOrder(orderId);
+  const option = select.selectedOptions[0];
+  const bankAmount = option ? parseFloat(option.dataset.amount) : NaN;
+  if (!order || Number.isNaN(bankAmount)) return base;
+  const orderAmount = order.amount;
+  const diffPct = orderAmount ? Math.abs(bankAmount - orderAmount) / orderAmount : 1;
+  if (diffPct <= 0.02) return base;
+  return `${base} Note: bank line amount ${rupees(bankAmount)} differs from the order amount ` +
+    `${rupees(orderAmount)} by ${(diffPct * 100).toFixed(1)}% -- not verified against a settlement ` +
+    `record by the system, confirmed by the reviewer as the correct pairing.`;
+}
+
 $("exceptions-table").addEventListener("click", (e) => {
   const whyBtn = e.target.closest(".why-btn");
   if (whyBtn) { showEvidence(whyBtn.dataset.orderId || null, whyBtn.dataset.bankLineId || null); return; }
@@ -1546,7 +1567,7 @@ $("exceptions-table").addEventListener("click", (e) => {
   const select = $("exceptions-table").querySelector(`select.manual-match-select[data-order-id="${CSS.escape(orderId)}"]`);
   const bankLineId = select ? select.value : "";
   if (!bankLineId) { $("status-text").textContent = "Pick a bank line before manually matching."; return; }
-  submitOverride("manual_match", orderId, bankLineId, "Manually matched by reviewer after checking bank portal");
+  submitOverride("manual_match", orderId, bankLineId, manualMatchNote(orderId, select));
 });
 
 $("evidence-close-btn").addEventListener("click", hideEvidence);

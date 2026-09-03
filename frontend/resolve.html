@@ -312,14 +312,34 @@ function render() {
       <div class="resolve-controls">
         <select class="match-select">
           <option value="">-- pick unclaimed bank line --</option>
-          ${e.orphanBankLines.map(b => `<option value="${esc(b.bank_line_id)}">${rupees(b.amount)} (${esc(b.bank_line_id)})</option>`).join("")}
+          ${e.orphanBankLines.map(b => `<option value="${esc(b.bank_line_id)}" data-amount="${b.amount}">${rupees(b.amount)} (${esc(b.bank_line_id)})</option>`).join("")}
         </select>
         <button class="match-btn">Manually match</button>
       </div>
     </div>`).join("");
 }
 
-async function submitOverride(orderId, bankLineId) {
+// A manual match has no automated amount check at all -- apply_override
+// just records whatever bank line the reviewer picked. Bake any material
+// amount gap into the audit note instead of staying silent about it; this
+// doesn't block the match (a genuine batched/split settlement can
+// legitimately not equal the order amount), it just keeps the audit trail
+// honest about what the reviewer was looking at.
+function manualMatchNote(orderId, select) {
+  const base = "Manually matched from the resolve-unmatched-orders dashboard.";
+  const order = (currentRun.orders || []).find(o => o.order_id === orderId);
+  const option = select.selectedOptions[0];
+  const bankAmount = option ? parseFloat(option.dataset.amount) : NaN;
+  if (!order || Number.isNaN(bankAmount)) return base;
+  const orderAmount = order.amount;
+  const diffPct = orderAmount ? Math.abs(bankAmount - orderAmount) / orderAmount : 1;
+  if (diffPct <= 0.02) return base;
+  return `${base} Note: bank line amount ${rupees(bankAmount)} differs from the order amount ` +
+    `${rupees(orderAmount)} by ${(diffPct * 100).toFixed(1)}% -- not verified against a settlement ` +
+    `record by the system, confirmed by the reviewer as the correct pairing.`;
+}
+
+async function submitOverride(orderId, bankLineId, reviewerNote) {
   $("status").textContent = "Applying override...";
   try {
     const res = await fetch("/api/override", {
@@ -328,7 +348,7 @@ async function submitOverride(orderId, bankLineId) {
         orders: currentRun.orders, matches: currentRun.matches,
         exceptions: currentRun.exceptions, audit_trail: currentRun.audit_trail,
         action: "manual_match", order_id: orderId, bank_line_id: bankLineId,
-        reviewer_note: "Manually matched from the resolve-unmatched-orders dashboard",
+        reviewer_note: reviewerNote,
         materiality_threshold: parseFloat(localStorage.getItem(MATERIALITY_STORAGE_KEY)) || DEFAULT_MATERIALITY_THRESHOLD,
       }),
     });
@@ -354,7 +374,7 @@ $("queue").addEventListener("click", (e) => {
   const select = item.querySelector(".match-select");
   const bankLineId = select.value;
   if (!bankLineId) { $("status").textContent = "Pick a bank line before manually matching."; return; }
-  submitOverride(orderId, bankLineId);
+  submitOverride(orderId, bankLineId, manualMatchNote(orderId, select));
 });
 
 // Chat assistant -- identical behavior to the main dashboard's, answering
