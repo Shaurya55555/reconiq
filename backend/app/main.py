@@ -91,6 +91,7 @@ REQUIRED_ORDER_FIELDS = {"order_id", "amount", "razorpay_payment_id", "created_a
 REQUIRED_SETTLEMENT_FIELDS = {"settlement_id", "payment_id", "utr", "amount", "settled_at"}
 REQUIRED_BANK_LINE_FIELDS = {"line_id", "narration", "amount", "value_date"}
 REQUIRED_REFUND_FIELDS = {"payment_id", "amount"}
+REQUIRED_CHARGEBACK_FIELDS = {"payment_id", "amount"}
 
 
 class UploadRunRequest(BaseModel):
@@ -98,6 +99,7 @@ class UploadRunRequest(BaseModel):
     settlements: list[dict]
     bank_lines: list[dict]
     refunds: list[dict] = []
+    chargebacks: list[dict] = []
     confidence_threshold: float | None = None
     fee_tolerance_pct: float = matcher.FEE_TOLERANCE_PCT
     date_drift_ok_days: int = matcher.DATE_DRIFT_OK_DAYS
@@ -143,6 +145,45 @@ def _coerce_settlement_payment_ids(rows: list[dict]) -> list[dict]:
             ids = [p.strip() for p in str(raw).split(",") if p.strip()]
             if ids:
                 row["payment_ids"] = ids
+        out.append(row)
+    return out
+
+
+def _coerce_settlement_is_instant(rows: list[dict]) -> list[dict]:
+    """Optional `is_instant` column on an uploaded settlements.csv --
+    CSV values arrive as strings, but matcher.py's wider instant-
+    settlement fee tolerance checks `stl.get("is_instant")` as a real
+    boolean. Absent or falsy-looking values stay falsy (standard
+    tolerance); only an explicit true/1/yes flips it on.
+    """
+    out = []
+    for row in rows:
+        row = dict(row)
+        raw = str(row.get("is_instant", "")).strip().lower()
+        if raw in ("true", "1", "yes", "y"):
+            row["is_instant"] = True
+        elif "is_instant" in row:
+            row["is_instant"] = False
+        out.append(row)
+    return out
+
+
+def _coerce_chargeback_fee(rows: list[dict]) -> list[dict]:
+    """Optional `fee` column on an uploaded chargebacks list -- CSV/JSON
+    values may arrive as strings; matcher._check_chargebacks adds this
+    directly to the reversed amount, so it needs to be a real float
+    before it gets there. Absent or empty means no separate fee, not an
+    error.
+    """
+    out = []
+    for row in rows:
+        row = dict(row)
+        raw = row.get("fee")
+        if raw not in (None, ""):
+            try:
+                row["fee"] = float(raw)
+            except (TypeError, ValueError):
+                raise ValueError(f"chargebacks row has a non-numeric fee: {raw!r}")
         out.append(row)
     return out
 
@@ -351,8 +392,12 @@ def run_uploaded_data(req: UploadRunRequest):
         orders = _validate_and_coerce(req.orders, REQUIRED_ORDER_FIELDS, "orders")
         settlements = _validate_and_coerce(req.settlements, REQUIRED_SETTLEMENT_FIELDS, "settlements")
         settlements = _coerce_settlement_payment_ids(settlements)
+        settlements = _coerce_settlement_is_instant(settlements)
         bank_lines = _validate_and_coerce(req.bank_lines, REQUIRED_BANK_LINE_FIELDS, "bank_lines")
         refunds = _validate_and_coerce(req.refunds, REQUIRED_REFUND_FIELDS, "refunds") if req.refunds else []
+        chargebacks = (_coerce_chargeback_fee(
+            _validate_and_coerce(req.chargebacks, REQUIRED_CHARGEBACK_FIELDS, "chargebacks"))
+            if req.chargebacks else [])
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
@@ -364,7 +409,7 @@ def run_uploaded_data(req: UploadRunRequest):
     rule_result = matcher.reconcile(orders, settlements, bank_lines,
                                      fee_tolerance_pct=req.fee_tolerance_pct,
                                      date_drift_ok_days=req.date_drift_ok_days,
-                                     refunds=refunds)
+                                     refunds=refunds, chargebacks=chargebacks)
     t_llm = time.perf_counter()
     final = matcher.apply_llm_resolutions(rule_result, llm_resolver.resolve, confidence_threshold=threshold)
     llm_elapsed = time.perf_counter() - t_llm
@@ -387,6 +432,7 @@ def run_uploaded_data(req: UploadRunRequest):
         "settlements": settlements,
         "bank_lines": bank_lines,
         "refunds": refunds,
+        "chargebacks": chargebacks,
         "matches": final["matches"],
         "exceptions": classified_exceptions,
         "verdict": verdict,

@@ -159,6 +159,56 @@ def test_run_upload_endpoint_accepts_a_comma_delimited_payment_ids_column():
     assert methods == {"ORD1": "batch_settlement", "ORD2": "batch_settlement"}
 
 
+def test_run_upload_endpoint_accepts_an_is_instant_column_with_wider_fee_tolerance():
+    """A CSV upload's settlement row can carry an optional is_instant
+    column (arrives as a string like "true" or "1"), coerced to a real
+    boolean before reaching matcher.py -- a 4% fee deduction is outside
+    the standard 3% tolerance but within the instant-settlement one, and
+    must resolve as a clean fuzzy match, not amount_mismatch."""
+    orders = [{"order_id": "ORD1", "amount": 1000.0, "razorpay_payment_id": "pay_1",
+               "created_at": "2026-08-01T00:00:00", "customer": "A"}]
+    settlements = [{"settlement_id": "stl1", "payment_id": "pay_1", "utr": "AXISCN123456",
+                     "amount": 960.0, "settled_at": "2026-08-02", "is_instant": "true"}]
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-AXISCN123456-RAZORPAY",
+                    "amount": 960.0, "value_date": "2026-08-02"}]
+
+    res = client.post("/api/run-upload", json={
+        "orders": orders, "settlements": settlements, "bank_lines": bank_lines,
+    })
+    assert res.status_code == 200
+    body = res.json()
+    assert body["summary"]["matched"] == 1
+    assert body["matches"][0]["method"] == "fuzzy"
+    assert "instant-settlement fee tolerance" in body["matches"][0]["note"]
+
+
+def test_run_upload_endpoint_accepts_chargebacks_with_a_string_fee_column():
+    """A CSV upload's optional chargebacks file carries payment_id, amount,
+    and an optional fee -- fee arrives as a string ("500.00") and must be
+    coerced to a real float before matcher.py adds it to the reversed
+    amount. The underlying settlement must still resolve cleanly; the
+    chargeback is a separate, additive exception."""
+    orders = [{"order_id": "ORD1", "amount": 1000.0, "razorpay_payment_id": "pay_1",
+               "created_at": "2026-08-01T00:00:00", "customer": "A"}]
+    settlements = [{"settlement_id": "stl1", "payment_id": "pay_1", "utr": "AXISCN123456",
+                     "amount": 1000.0, "settled_at": "2026-08-02"}]
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-AXISCN123456-RAZORPAY",
+                    "amount": 1000.0, "value_date": "2026-08-02"}]
+    chargebacks = [{"payment_id": "pay_1", "amount": "1000.00", "fee": "500.00"}]
+
+    res = client.post("/api/run-upload", json={
+        "orders": orders, "settlements": settlements, "bank_lines": bank_lines,
+        "chargebacks": chargebacks,
+    })
+    assert res.status_code == 200
+    body = res.json()
+    assert body["summary"]["matched"] == 1
+    assert body["matches"][0]["method"] == "exact"
+    cb_exceptions = [e for e in body["exceptions"] if e["type"] == "chargeback"]
+    assert len(cb_exceptions) == 1
+    assert cb_exceptions[0]["amount"] == 1500.0
+
+
 def test_run_upload_endpoint_rejects_missing_required_columns():
     res = client.post("/api/run-upload", json={
         "orders": [{"order_id": "ORD1", "amount": 100.0}],  # missing required fields

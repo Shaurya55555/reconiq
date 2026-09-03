@@ -64,13 +64,29 @@ def _refund_suffix(pre: float, post: float) -> str:
     return ""
 
 
+INSTANT_SETTLEMENT_FEE_TOLERANCE_PCT = 0.05  # Razorpay's Instant Settlement product pays
+# out on demand instead of on the standard T+2 cycle, and charges an additional
+# convenience fee on top of the normal processing fee for that -- a genuinely
+# higher deduction, not a mismatch. The exact real-world instant-settlement fee
+# isn't independently confirmed here, so this is a deliberately generous (but
+# still bounded, and kept under amount_mismatch's 6% floor -- see data_gen.py)
+# approximation rather than a specific claimed percentage.
+
+
 def _find_settlement_match(stl: dict, order: dict, utr_matches: list[dict],
                             fee_tolerance_pct: float, date_drift_ok_days: int) -> tuple | None:
     """Try to resolve one settlement against the bank lines that already
     reference its UTR (`utr_matches`). Returns (method, confidence, note,
     bank_line_ids) or None if nothing deterministic fits -- in which case
     the caller falls back to the LLM pass.
+
+    An instant settlement (stl.get("is_instant")) gets a wider fee
+    tolerance than a standard one -- its extra on-demand-payout fee is a
+    real, legitimate deduction, not a sign of a genuine amount problem,
+    and the standard 3% tolerance would risk misflagging it.
     """
+    effective_fee_tolerance_pct = (INSTANT_SETTLEMENT_FEE_TOLERANCE_PCT
+                                    if stl.get("is_instant") else fee_tolerance_pct)
     amount_diff_pct = abs(stl["amount"] - order["amount"]) / order["amount"]
     date_drift = abs((_parse_date(stl["settled_at"]) - _parse_date(order["created_at"])).days)
 
@@ -82,9 +98,11 @@ def _find_settlement_match(stl: dict, order: dict, utr_matches: list[dict],
             return ("fuzzy", 0.85,
                     f"UTR + amount matched exactly; settlement date drifted {date_drift}d "
                     f"beyond the {date_drift_ok_days}d policy window", [single["line_id"]])
-        if amount_diff_pct <= fee_tolerance_pct:
+        if amount_diff_pct <= effective_fee_tolerance_pct:
+            tolerance_note = ("within instant-settlement fee tolerance" if stl.get("is_instant")
+                               else "within fee tolerance")
             return ("fuzzy", 0.9,
-                    f"UTR matched; amount differs by {amount_diff_pct:.1%}, within fee tolerance",
+                    f"UTR matched; amount differs by {amount_diff_pct:.1%}, {tolerance_note}",
                     [single["line_id"]])
         # a single line references this UTR but the amount is genuinely
         # wrong -- don't let a lucky group-sum below paper over that below;
@@ -196,10 +214,49 @@ def _check_over_refunds(orders: list[dict], refunds: list[dict], log) -> list[di
     return exceptions
 
 
+def _check_chargebacks(orders: list[dict], chargebacks: list[dict], log) -> list[dict]:
+    """A chargeback is not a refund wearing a different name -- it's a
+    customer-initiated, forced reversal via their card issuer, not
+    something the merchant chose to do. Two concrete differences that
+    matter for reconciliation: it typically carries its own penalty fee
+    on top of the reversed amount (a real cost with nothing to do with
+    the original order), and it can land long after settlement with no
+    date-drift relationship to it (a dispute window, not a payout SLA).
+    Modeled the same way as _check_over_refunds -- purely additive,
+    never touches `matches` -- so a chargeback is never mistaken for a
+    voluntary refund and never netted against a settlement the way a
+    pre-settlement refund legitimately can be.
+    """
+    by_payment: dict[str, list[dict]] = {}
+    for cb in (chargebacks or []):
+        by_payment.setdefault(cb["payment_id"], []).append(cb)
+
+    order_id_by_payment = {o["razorpay_payment_id"]: o["order_id"] for o in orders}
+    exceptions = []
+    for payment_id, payment_chargebacks in by_payment.items():
+        order_id = order_id_by_payment.get(payment_id)
+        for cb in payment_chargebacks:
+            fee = round(cb.get("fee", 0.0) or 0.0, 2)
+            total_impact = round(cb["amount"] + fee, 2)
+            fee_note = f" plus a Rs {fee:,.2f} chargeback fee" if fee else ""
+            exceptions.append({
+                "type": "chargeback", "order_id": order_id, "payment_id": payment_id,
+                "amount": total_impact,
+                "reason": f"Chargeback for Rs {cb['amount']:,.2f}{fee_note} was filed against "
+                          "this payment -- a customer-initiated dispute reversal, not a "
+                          "merchant-initiated refund, and never netted against any settlement.",
+            })
+            log("chargeback_check", "exception", "rule", 1.0,
+                f"Chargeback of Rs {cb['amount']:,.2f}{fee_note} filed against {payment_id}.",
+                order_id=order_id, payment_id=payment_id)
+    return exceptions
+
+
 def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict],
               fee_tolerance_pct: float = FEE_TOLERANCE_PCT,
               date_drift_ok_days: int = DATE_DRIFT_OK_DAYS,
-              refunds: list[dict] | None = None) -> dict[str, Any]:
+              refunds: list[dict] | None = None,
+              chargebacks: list[dict] | None = None) -> dict[str, Any]:
     """fee_tolerance_pct and date_drift_ok_days are policy, not physics --
     a real merchant's actual fee schedule and settlement SLA would set
     these, so they're parameters with the current constants as defaults,
@@ -408,6 +465,7 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
     refund_matches, refund_exceptions = _match_refund_debits(refunds or [], unmatched_bank, log)
     exceptions.extend(refund_exceptions)
     exceptions.extend(_check_over_refunds(orders, refunds, log))
+    exceptions.extend(_check_chargebacks(orders, chargebacks or [], log))
 
     return {
         "matches": matches,
@@ -689,20 +747,22 @@ def summarize(orders: list[dict], result: dict, refunds: list[dict] | None = Non
     # carry their own "amount" and are added on top, since they're real
     # money movements not attributable to any order.
     #
-    # refund_amount_exceeds_order is different in kind from every other
-    # exception type here: it's deliberately additive (see
-    # _check_over_refunds) and can sit on an order whose settlement is
-    # otherwise cleanly matched -- folding it into the same "count the
-    # whole order amount" rule would inflate at-risk by the full order
-    # value over what's actually anomalous (the excess). It carries its
-    # own accurate `amount` (the excess), so it's summed like an
+    # refund_amount_exceeds_order and chargeback are both different in
+    # kind from every other exception type here: they're deliberately
+    # additive (see _check_over_refunds / _check_chargebacks) and can sit
+    # on an order whose settlement is otherwise cleanly matched --
+    # folding either into the same "count the whole order amount" rule
+    # would inflate at-risk by the full order value over what's actually
+    # anomalous (the excess, or the chargeback's own amount+fee). Both
+    # carry their own accurate `amount`, so they're summed like an
     # orphan-bank-line exception instead.
+    ADDITIVE_EXCEPTION_TYPES = {"refund_amount_exceeds_order", "chargeback"}
     excepted_order_ids = {e["order_id"] for e in result["exceptions"]
-                           if e.get("order_id") and e["type"] != "refund_amount_exceeds_order"}
+                           if e.get("order_id") and e["type"] not in ADDITIVE_EXCEPTION_TYPES}
     total_amount_at_risk = round(
         sum(amount_by_order_id.get(oid, 0.0) for oid in excepted_order_ids)
         + sum(e.get("amount", 0.0) for e in result["exceptions"]
-              if not e.get("order_id") or e["type"] == "refund_amount_exceeds_order"), 2)
+              if not e.get("order_id") or e["type"] in ADDITIVE_EXCEPTION_TYPES), 2)
 
     # Cash position: a refund record proves money was promised back, not
     # that it left the account -- these three numbers separate "refunded

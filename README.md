@@ -606,6 +606,31 @@ reference is `refund_id` if the uploaded `refunds.csv` has that optional
 column, falling back to a `payment_id`+`amount` composite key when it
 doesn't.
 
+**Over-refunds, chargebacks, and instant settlements — three more honest,
+additive signals.** None of these touch settlement matching or ever
+invalidate a match already made; each is purely additive, the same
+pattern as cash position above.
+- `refund_amount_exceeds_order`: when a payment's refunds sum to more
+  than its order's own amount (a data-quality or fraud signal), flagged
+  with the excess as its own exception — never the whole order amount,
+  since the settlement itself can still be perfectly legitimate.
+- `chargeback`: a customer-initiated, forced reversal via their card
+  issuer is not a merchant-initiated refund wearing a different name —
+  it typically carries its own penalty fee on top of the reversed
+  amount, and can land long after settlement with no date-drift
+  relationship to it (a dispute window, not a payout SLA). Upload path
+  only for now (optional `chargebacks` list/CSV: `payment_id`, `amount`,
+  optional `fee`) — not part of the default synthetic demo batch.
+- Instant settlements: Razorpay's on-demand payout product charges an
+  additional convenience fee on top of the standard one, which the
+  default 3% `fee_tolerance_pct` doesn't expect. A settlement flagged
+  `is_instant` (synthetic generator: `data_gen.INSTANT_SETTLEMENT_RATE`;
+  upload path: an optional `is_instant` column, `true`/`1`/`yes`) gets a
+  separate, wider — but still bounded —
+  `matcher.INSTANT_SETTLEMENT_FEE_TOLERANCE_PCT` (5%) instead, so a
+  legitimately higher instant-settlement fee doesn't get misflagged as
+  `amount_mismatch`.
+
 **11. Empirical confidence-threshold calibration.** `LLM_CONFIDENCE_THRESHOLD`
 (default `0.6`) was always a reasonable starting point, not an
 empirically justified one. `POST /api/calibrate` (and the "Confidence

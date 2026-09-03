@@ -510,6 +510,7 @@
           <label>Settlements CSV: <input id="upload-settlements" type="file" accept=".csv"></label>
           <label>Bank lines CSV: <input id="upload-bank-lines" type="file" accept=".csv"></label>
           <label>Refunds CSV (optional): <input id="upload-refunds" type="file" accept=".csv"></label>
+          <label>Chargebacks CSV (optional): <input id="upload-chargebacks" type="file" accept=".csv"></label>
         </div>
         <div class="row">
           <button class="secondary" id="upload-run-btn">Run on my data</button>
@@ -518,11 +519,18 @@
           Required columns &mdash; orders: order_id, amount, razorpay_payment_id, created_at.
           settlements: settlement_id, payment_id, utr, amount, settled_at
           (optional payment_ids column: a quoted, comma-separated list of payment IDs
-          for one settlement row that covers more than one payment).
+          for one settlement row that covers more than one payment; optional is_instant
+          column: true/1/yes for an on-demand Instant Settlement, which gets a wider
+          fee tolerance since it carries a real, higher payout fee).
           bank_lines: line_id, narration, amount, value_date.
           refunds (optional): payment_id, amount (add refund_id for reliable outbound
           cash-position matching against a refund's bank debit line -- without it,
           matching falls back to a payment_id+amount key).
+          chargebacks (optional): payment_id, amount, plus an optional fee column
+          &mdash; a chargeback is a forced, customer-initiated reversal, not a
+          voluntary refund, and is never netted against a settlement the way a
+          refund can be; it's reported as its own exception with the reversed
+          amount plus fee.
           No ground-truth accuracy is shown for your own data (no seeded truth label to score against) &mdash;
           match rate, amount at risk, and the exception list still are.
         </p>
@@ -889,20 +897,21 @@ async function runOnUploadedData() {
   $("upload-run-btn").disabled = true;
   setStatus("Parsing CSVs and reconciling...", true);
   try {
-    const [ordersText, settlementsText, bankLinesText, refundsText] = await Promise.all([
+    const [ordersText, settlementsText, bankLinesText, refundsText, chargebacksText] = await Promise.all([
       readFileAsText($("upload-orders")), readFileAsText($("upload-settlements")), readFileAsText($("upload-bank-lines")),
-      readFileAsText($("upload-refunds")),
+      readFileAsText($("upload-refunds")), readFileAsText($("upload-chargebacks")),
     ]);
     if (!ordersText || !settlementsText || !bankLinesText) {
       throw new Error("Pick all three required CSV files (orders, settlements, bank lines).");
     }
     const orders = parseCsv(ordersText), settlements = parseCsv(settlementsText), bankLines = parseCsv(bankLinesText);
     const refunds = refundsText ? parseCsv(refundsText) : [];
+    const chargebacks = chargebacksText ? parseCsv(chargebacksText) : [];
 
     const res = await fetch(`${API}/api/run-upload`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        orders, settlements, bank_lines: bankLines, refunds,
+        orders, settlements, bank_lines: bankLines, refunds, chargebacks,
         confidence_threshold: parseFloat($("confidence-threshold").value),
         fee_tolerance_pct: parseFloat($("fee-tolerance").value) / 100,
         date_drift_ok_days: parseInt($("date-drift").value, 10),

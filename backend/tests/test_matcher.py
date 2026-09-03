@@ -216,6 +216,80 @@ def test_fee_tolerance_is_a_real_parameter_not_a_fixed_constant():
     assert len(strict["matches"]) <= len(lenient["matches"])
 
 
+# ---- instant settlements: a wider, but still bounded, fee tolerance ----
+
+def test_instant_settlement_within_wider_tolerance_resolves_as_fuzzy():
+    """A 4% deduction is outside the standard 3% fee tolerance but within
+    matcher.INSTANT_SETTLEMENT_FEE_TOLERANCE_PCT (5%) -- an instant
+    settlement's extra on-demand-payout fee is a real, legitimate
+    deduction, not a sign of a genuine amount problem."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "setl_1", "payment_id": "pay_1", "utr": "AXISCN123456",
+                  "amount": 960.0, "settled_at": "2026-08-02", "is_instant": True}  # 4% fee
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-AXISCN123456-RAZORPAY",
+                   "amount": 960.0, "value_date": "2026-08-02"}]
+
+    result = matcher.reconcile([order], [settlement], bank_lines)
+    assert not result["exceptions"]
+    assert len(result["matches"]) == 1
+    match = result["matches"][0]
+    assert match["method"] == "fuzzy"
+    assert "instant-settlement fee tolerance" in match["note"]
+
+
+def test_same_deviation_without_is_instant_becomes_amount_mismatch():
+    """The exact same 4% deviation, without the is_instant flag, must be
+    outside the standard 3% tolerance and surface as amount_mismatch --
+    proving the wider tolerance is genuinely conditional on is_instant,
+    not a silent global loosening."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "setl_1", "payment_id": "pay_1", "utr": "AXISCN123456",
+                  "amount": 960.0, "settled_at": "2026-08-02"}  # same 4% fee, not instant
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-AXISCN123456-RAZORPAY",
+                   "amount": 960.0, "value_date": "2026-08-02"}]
+
+    result = matcher.reconcile([order], [settlement], bank_lines)
+    mismatches = [e for e in result["exceptions"] if e["type"] == "amount_mismatch"]
+    assert len(mismatches) == 1
+    assert not result["matches"]
+
+
+def test_instant_settlement_beyond_its_own_tolerance_is_still_a_mismatch():
+    """Instant doesn't mean unlimited tolerance -- a 15% deviation is
+    outside even the wider instant-settlement bar and must still surface
+    as a genuine amount_mismatch."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "setl_1", "payment_id": "pay_1", "utr": "AXISCN123456",
+                  "amount": 850.0, "settled_at": "2026-08-02", "is_instant": True}  # 15% off
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-AXISCN123456-RAZORPAY",
+                   "amount": 850.0, "value_date": "2026-08-02"}]
+
+    result = matcher.reconcile([order], [settlement], bank_lines)
+    mismatches = [e for e in result["exceptions"] if e["type"] == "amount_mismatch"]
+    assert len(mismatches) == 1
+
+
+def test_data_gen_produces_instant_settlements_that_resolve_cleanly():
+    """Sanity check at scale: the synthetic generator's is_instant rows
+    must actually exercise the wider-tolerance path end to end, not just
+    exist as unused data."""
+    batch = data_gen.generate_batch(n_orders=400, seed=1)
+    instant_settlements = [s for s in batch["settlements"] if s.get("is_instant")]
+    assert instant_settlements, "expected at least one instant settlement at this seed/scale"
+
+    result = matcher.reconcile(batch["orders"], batch["settlements"], batch["bank_lines"],
+                                refunds=batch["refunds"])
+    matched_order_ids = {m["order_id"] for m in result["matches"]}
+    payment_id_by_order = {o["razorpay_payment_id"]: o["order_id"] for o in batch["orders"]}
+    for stl in instant_settlements:
+        order_id = payment_id_by_order.get(stl["payment_id"])
+        assert order_id in matched_order_ids, \
+            f"instant settlement for {stl['payment_id']} should resolve, not except"
+
+
 def test_date_drift_tolerance_changes_classification_not_amount_mismatch_outcome():
     """date_drift_ok_days should only affect how an exact-amount match is
     labeled (exact vs fuzzy/date-drifted) -- it must never rescue a
@@ -1014,6 +1088,81 @@ def test_over_refund_adds_only_the_excess_to_amount_at_risk_not_the_whole_order(
 
     assert summary["total_amount_matched"] == 0.0
     assert summary["total_amount_at_risk"] == 500.0  # the excess only, not 500 + 1000
+
+
+# ---- chargebacks: forced reversals, distinct from voluntary refunds ----
+
+def test_chargeback_surfaces_as_its_own_exception_type():
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "setl_1", "payment_id": "pay_1", "utr": "AXISCN123456",
+                  "amount": 1000.0, "settled_at": "2026-08-02"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-AXISCN123456-RAZORPAY",
+                   "amount": 1000.0, "value_date": "2026-08-02"}]
+    chargeback = {"payment_id": "pay_1", "amount": 1000.0, "fee": 500.0}
+
+    result = matcher.reconcile([order], [settlement], bank_lines, chargebacks=[chargeback])
+    cb_exceptions = [e for e in result["exceptions"] if e["type"] == "chargeback"]
+    assert len(cb_exceptions) == 1
+    assert cb_exceptions[0]["order_id"] == "ORD1"
+    assert cb_exceptions[0]["amount"] == 1500.0  # reversed amount + fee, not just one or the other
+    assert "customer-initiated dispute" in cb_exceptions[0]["reason"]
+
+
+def test_chargeback_never_invalidates_the_underlying_settlement():
+    """The critical invariant, same shape as the over-refund one: a
+    chargeback is purely additive. A legitimate settlement must keep
+    resolving as `exact` -- never demoted to amount_mismatch or removed
+    -- even when a chargeback exists against the same payment, and even
+    when it's filed long after settlement (a real dispute window, not a
+    payout SLA)."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "setl_1", "payment_id": "pay_1", "utr": "AXISCN123456",
+                  "amount": 1000.0, "settled_at": "2026-08-02"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-AXISCN123456-RAZORPAY",
+                   "amount": 1000.0, "value_date": "2026-08-02"}]
+    # filed 90 days after settlement -- well outside any date-drift window,
+    # and must not need to be
+    chargeback = {"payment_id": "pay_1", "amount": 1000.0,
+                  "charged_back_at": "2026-11-02T00:00:00"}
+
+    result = matcher.reconcile([order], [settlement], bank_lines, chargebacks=[chargeback])
+    assert len(result["matches"]) == 1
+    match = result["matches"][0]
+    assert match["method"] == "exact"
+    assert not any(e["type"] == "amount_mismatch" for e in result["exceptions"])
+    assert any(e["type"] == "chargeback" for e in result["exceptions"])
+
+
+def test_chargeback_with_no_fee_uses_just_the_reversed_amount():
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 500.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    chargeback = {"payment_id": "pay_1", "amount": 500.0}  # no fee field at all
+
+    result = matcher.reconcile([order], [], [], chargebacks=[chargeback])
+    cb_exceptions = [e for e in result["exceptions"] if e["type"] == "chargeback"]
+    assert cb_exceptions[0]["amount"] == 500.0
+
+
+def test_chargeback_at_risk_amount_is_not_double_counted_with_a_clean_match():
+    """Same class of fix as the over-refund at-risk adjustment: a
+    chargeback on an order whose settlement is otherwise cleanly matched
+    must only add its own amount+fee to at-risk, not the full order
+    amount on top of that (which is already correctly counted as
+    reconciled, not at-risk)."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "setl_1", "payment_id": "pay_1", "utr": "AXISCN123456",
+                  "amount": 1000.0, "settled_at": "2026-08-02"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-AXISCN123456-RAZORPAY",
+                   "amount": 1000.0, "value_date": "2026-08-02"}]
+    chargeback = {"payment_id": "pay_1", "amount": 1000.0, "fee": 500.0}
+
+    result = matcher.reconcile([order], [settlement], bank_lines, chargebacks=[chargeback])
+    summary = matcher.summarize([order], result)
+    assert summary["total_amount_matched"] == 1000.0
+    assert summary["total_amount_at_risk"] == 1500.0  # the chargeback's own impact only
 
 
 # ---- cash position: does a refund's money actually leave the bank? ----

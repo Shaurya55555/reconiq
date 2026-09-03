@@ -32,6 +32,14 @@ Anomaly = Literal[
     "refunded_after_settlement",
 ]
 
+INSTANT_SETTLEMENT_RATE = 0.15  # fraction of otherwise-clean settlements a merchant
+                                 # took as an on-demand Instant Settlement payout instead
+                                 # of the standard cycle
+INSTANT_SETTLEMENT_FEE_RANGE = (0.032, 0.045)  # standard fee (~1.5-2.8%, see
+                                                # fee_adjusted) plus Razorpay's additional
+                                                # on-demand payout fee -- stays comfortably
+                                                # under matcher.INSTANT_SETTLEMENT_FEE_TOLERANCE_PCT
+
 ANOMALY_WEIGHTS = {
     "clean": 0.30,
     "fee_adjusted": 0.10,
@@ -205,13 +213,28 @@ def generate_batch(n_orders: int = 70, seed: int | None = None,
         if anomaly == "date_shifted":
             settled_at = settled_at + timedelta(days=rng.randint(6, 10))
 
-        settlements.append({
+        # Instant Settlement is an independent, orthogonal modifier (real
+        # merchants mix instant and standard payouts), not its own anomaly
+        # type -- only layered onto otherwise-legitimate settlements
+        # (clean/fee_adjusted), never onto a deliberately broken one, so it
+        # never masks or gets confused with a genuine anomaly under test.
+        # Its higher fee (matcher.INSTANT_SETTLEMENT_FEE_TOLERANCE_PCT
+        # covers it) replaces whatever standard fee was set above.
+        is_instant = anomaly in ("clean", "fee_adjusted") and rng.random() < INSTANT_SETTLEMENT_RATE
+        if is_instant:
+            fee_pct = rng.uniform(*INSTANT_SETTLEMENT_FEE_RANGE)
+            net_amount = round(amount * (1 - fee_pct), 2)
+
+        settlement_row = {
             "settlement_id": f"setl_{_random_id_suffix(rng)}",
             "payment_id": payment_id,
             "utr": utr,
             "amount": net_amount,
             "settled_at": settled_at.isoformat(),
-        })
+        }
+        if is_instant:
+            settlement_row["is_instant"] = True
+        settlements.append(settlement_row)
 
         if anomaly == "duplicate_settlement":
             dup_amount = round(net_amount * rng.uniform(0.98, 1.0), 2)
