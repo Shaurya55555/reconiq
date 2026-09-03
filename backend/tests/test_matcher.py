@@ -64,6 +64,40 @@ def test_exact_fee_boundary_resolves_consistently_regardless_of_float_noise():
         assert result["matches"][0]["method"] == "fuzzy"
 
 
+def test_fee_boundary_absorbs_settlement_paisa_rounding_not_just_float_noise():
+    """Regression test: a settlement amount is stored to 2 decimal places
+    (paisa), so a test case built to be "exactly 3%" against a "true"
+    higher-precision target (e.g. 7850.85 * 0.97 = 7615.3245) gets stored
+    as 7615.32 -- a genuine (if tiny) real-world rounding gap, not IEEE-754
+    noise, making the actual difference 3.0001%. A strict percentage
+    comparison rejected this as amount_mismatch even though it's exactly
+    the kind of case the 3% policy is meant to allow. One paisa of
+    absolute slack must absorb this without loosening the tolerance for a
+    genuine mismatch."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 7850.85,
+             "created_at": "2026-09-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR1",
+                  "amount": 7615.32, "settled_at": "2026-09-03"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR1-RAZORPAY",
+                   "amount": 7615.32, "value_date": "2026-09-03"}]
+
+    result = matcher.reconcile([order], [settlement], bank_lines)
+    assert len(result["matches"]) == 1
+    assert result["matches"][0]["method"] == "fuzzy"
+
+    # a real 4% mismatch must still be rejected -- the buffer is one paisa,
+    # not a loosened tolerance
+    order2 = {"order_id": "ORD2", "customer": "Test", "amount": 5000.0,
+              "created_at": "2026-09-01T00:00:00", "razorpay_payment_id": "pay_2"}
+    settlement2 = {"settlement_id": "stl2", "payment_id": "pay_2", "utr": "UTR2",
+                   "amount": 5200.0, "settled_at": "2026-09-03"}
+    bank_lines2 = [{"line_id": "bl2", "narration": "NEFT-UTR2-RAZORPAY",
+                    "amount": 5200.0, "value_date": "2026-09-03"}]
+    result2 = matcher.reconcile([order2], [settlement2], bank_lines2)
+    assert not result2["matches"]
+    assert any(e["type"] == "amount_mismatch" for e in result2["exceptions"])
+
+
 def test_date_drift_is_enforced_even_when_amount_also_differs_by_a_fee():
     """Regression test: date_drift_ok_days was only ever checked in the
     near-exact-amount branch of _find_settlement_match. A settlement that

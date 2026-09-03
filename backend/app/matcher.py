@@ -80,6 +80,21 @@ INSTANT_SETTLEMENT_FEE_TOLERANCE_PCT = 0.05  # Razorpay's Instant Settlement pro
 # approximation rather than a specific claimed percentage.
 
 
+def _within_fee_tolerance(diff_amount: float, base_amount: float, tolerance_pct: float) -> bool:
+    """A percentage-only comparison can reject a genuinely-intended
+    boundary case by a hair purely because the settlement amount itself
+    was rounded to the nearest paisa when stored -- e.g. a "true" 3%
+    target of 7615.3245 is stored as 7615.32, making the real difference
+    3.0001%, not 3.0000%. That's the same class of currency-rounding gap
+    as the 0.01 tolerance already used for bank-line/settlement equality
+    elsewhere in this file, just showing up in the percentage check
+    instead. One paisa of absolute slack beyond the percentage-computed
+    boundary absorbs it without loosening the tolerance for a genuine
+    mismatch (a real 4%+ difference is still ~400x that buffer).
+    """
+    return diff_amount <= round(base_amount * tolerance_pct + 0.01, 6)
+
+
 def _find_settlement_match(stl: dict, order: dict, utr_matches: list[dict],
                             fee_tolerance_pct: float, date_drift_ok_days: int) -> tuple | None:
     """Try to resolve one settlement against the bank lines that already
@@ -126,7 +141,8 @@ def _find_settlement_match(stl: dict, order: dict, utr_matches: list[dict],
             return ("fuzzy", 0.85,
                     f"UTR + amount matched exactly; settlement date drifted {date_drift}d "
                     f"beyond the {date_drift_ok_days}d policy window", [single["line_id"]])
-        if amount_diff_pct <= effective_fee_tolerance_pct:
+        if _within_fee_tolerance(abs(stl["amount"] - order["amount"]), order["amount"] or 1.0,
+                                  effective_fee_tolerance_pct):
             tolerance_note = ("within instant-settlement fee tolerance" if stl.get("is_instant")
                                else "within fee tolerance")
             # date_drift_ok_days was only ever checked in the near-exact-
@@ -494,9 +510,10 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
             refund_suffix = _refund_suffix(pre, post)
             # Same float-noise guard as _find_settlement_match's identical
             # comparison -- see the comment there.
-            amount_diff_pct = round(
-                abs(stl["amount"] - match_order["amount"]) / (match_order["amount"] or order["amount"] or 1.0), 6)
-            if amount_diff_pct > fee_tolerance_pct:
+            base_amount = match_order["amount"] or order["amount"] or 1.0
+            amount_diff = abs(stl["amount"] - match_order["amount"])
+            amount_diff_pct = round(amount_diff / base_amount, 6)
+            if not _within_fee_tolerance(amount_diff, base_amount, fee_tolerance_pct):
                 # amount is genuinely off, not fee-sized -> not an LLM question
                 # This settlement's own bank line (found by UTR, currency-
                 # rounding-close to the settlement's own amount) is already
