@@ -508,54 +508,82 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
             stl = candidate_settlements[0]
             match_order, pre, post = _net_refund_for_settlement(order, stl, order_refunds)
             refund_suffix = _refund_suffix(pre, post)
-            # Same float-noise guard as _find_settlement_match's identical
-            # comparison -- see the comment there.
-            base_amount = match_order["amount"] or order["amount"] or 1.0
-            amount_diff = abs(stl["amount"] - match_order["amount"])
-            amount_diff_pct = round(amount_diff / base_amount, 6)
-            if not _within_fee_tolerance(amount_diff, base_amount, fee_tolerance_pct):
-                # amount is genuinely off, not fee-sized -> not an LLM question
-                # This settlement's own bank line (found by UTR, currency-
-                # rounding-close to the settlement's own amount) is already
-                # fully explained by this amount_mismatch exception -- claim
-                # it now so the end-of-pass sweep doesn't ALSO flag it as an
-                # unrelated unrecognized_bank_line, double-counting the same
-                # money as two separate risk line items in amount_at_risk.
-                stl_utr_matches = [b for b in unmatched_bank.values() if stl["utr"] in b["narration"]]
-                own_bank_line = next((b for b in stl_utr_matches if abs(b["amount"] - stl["amount"]) <= 0.01), None)
-                if own_bank_line:
-                    unmatched_bank.pop(own_bank_line["line_id"], None)
+
+            # A bank line found by this settlement's UTR whose amount is
+            # exactly zero is a distinct, more specific situation than a
+            # generic amount mismatch or an unresolved narration -- usually
+            # a reversed/failed transfer leg on the bank's side, not
+            # ambiguity worth an LLM's time or a vague "amount differs"
+            # framing. Checked before the amount_mismatch/needs_llm split
+            # below so it never gets bucketed as either.
+            stl_utr_matches = [b for b in unmatched_bank.values() if stl["utr"] in b["narration"]]
+            zero_bank_line = next((b for b in stl_utr_matches if b["amount"] == 0), None)
+            if zero_bank_line:
+                unmatched_bank.pop(zero_bank_line["line_id"], None)
                 exceptions.append({
-                    "type": "amount_mismatch", "order_id": order["order_id"],
-                    "settlement_id": stl["settlement_id"],
-                    "reason": f"Settlement amount {stl['amount']} differs from order "
-                              f"amount {order['amount']}{refund_suffix} by {amount_diff_pct:.1%}, "
-                              "outside plausible Razorpay fee range.",
+                    "type": "zero_amount_bank_line", "order_id": order["order_id"],
+                    "settlement_id": stl["settlement_id"], "bank_line_id": zero_bank_line["line_id"],
+                    "reason": "A bank line referencing this settlement's UTR was found, but its "
+                              f"amount is Rs 0.00 -- likely a reversed or failed transfer leg, "
+                              f"not usable to reconcile the expected Rs {stl['amount']:,.2f} settlement.",
                 })
                 log("match", "exception", "rule", 1.0,
-                    "amount diff exceeds fee tolerance", order_id=order["order_id"])
+                    "bank line references UTR but amount is zero", order_id=order["order_id"])
+                # deliberately falls through to the duplicate_candidate check
+                # below rather than `continue` -- a second candidate
+                # settlement for this payment_id must still be flagged even
+                # when the first one hit a zero-amount bank line.
             else:
-                # amount lines up with what we'd expect, but this settlement's
-                # UTR wasn't found verbatim in any remaining bank line -> the
-                # narration is garbled/truncated. Free-text reasoning territory.
-                needs_llm.append({
-                    "order_id": order["order_id"], "settlement_id": stl["settlement_id"],
-                    "expected_utr": stl["utr"], "expected_amount": stl["amount"],
-                    # cosmetic LLM-prompt context only, not part of
-                    # REQUIRED_ORDER_FIELDS -- uploaded orders.csv from a
-                    # real user has no reason to include it
-                    "customer": order.get("customer", "unknown"),
-                    # utr_matches here can be non-empty: a bank line's
-                    # narration can contain this exact UTR while still
-                    # being disqualified (wrong amount, e.g. a reversal
-                    # line). The final exception text must not claim the
-                    # UTR was "not found" when it plainly was -- that's
-                    # exactly the kind of overclaim this project exists
-                    # to avoid making.
-                    "utr_seen_in_narration": bool(utr_matches),
-                })
-                log("match", "deferred_to_llm", "rule", 0.0,
-                    "settlement UTR not found verbatim in any bank line", order_id=order["order_id"])
+                # Same float-noise guard as _find_settlement_match's identical
+                # comparison -- see the comment there.
+                base_amount = match_order["amount"] or order["amount"] or 1.0
+                amount_diff = abs(stl["amount"] - match_order["amount"])
+                amount_diff_pct = round(amount_diff / base_amount, 6)
+                if not _within_fee_tolerance(amount_diff, base_amount, fee_tolerance_pct):
+                    # amount is genuinely off, not fee-sized -> not an LLM question
+                    # This settlement's own bank line (found by UTR, currency-
+                    # rounding-close to the settlement's own amount) is already
+                    # fully explained by this amount_mismatch exception -- claim
+                    # it now so the end-of-pass sweep doesn't ALSO flag it as an
+                    # unrelated unrecognized_bank_line, double-counting the same
+                    # money as two separate risk line items in amount_at_risk.
+                    own_bank_line = next((b for b in stl_utr_matches if abs(b["amount"] - stl["amount"]) <= 0.01), None)
+                    if own_bank_line:
+                        unmatched_bank.pop(own_bank_line["line_id"], None)
+                    exceptions.append({
+                        "type": "amount_mismatch", "order_id": order["order_id"],
+                        "settlement_id": stl["settlement_id"],
+                        "reason": f"Settlement amount {stl['amount']} differs from order "
+                                  f"amount {order['amount']}{refund_suffix} by {amount_diff_pct:.1%}, "
+                                  "outside plausible Razorpay fee range.",
+                    })
+                    log("match", "exception", "rule", 1.0,
+                        "amount diff exceeds fee tolerance", order_id=order["order_id"])
+                else:
+                    # amount lines up with what we'd expect, but this settlement's
+                    # UTR wasn't found verbatim in any remaining bank line -> the
+                    # narration is garbled/truncated. Free-text reasoning territory.
+                    needs_llm.append({
+                        "order_id": order["order_id"], "settlement_id": stl["settlement_id"],
+                        "expected_utr": stl["utr"], "expected_amount": stl["amount"],
+                        # cosmetic LLM-prompt context only, not part of
+                        # REQUIRED_ORDER_FIELDS -- uploaded orders.csv from a
+                        # real user has no reason to include it
+                        "customer": order.get("customer", "unknown"),
+                        # utr_matches here can be non-empty: a bank line's
+                        # narration can contain this exact UTR while still
+                        # being disqualified (wrong amount, e.g. a reversal
+                        # line). The final exception text must not claim the
+                        # UTR was "not found" when it plainly was -- that's
+                        # exactly the kind of overclaim this project exists
+                        # to avoid making. stl_utr_matches (not the outer
+                        # loop's utr_matches, which reflects whichever
+                        # candidate was tried last and may not be `stl`) is
+                        # freshly computed above for this exact settlement.
+                        "utr_seen_in_narration": bool(stl_utr_matches),
+                    })
+                    log("match", "deferred_to_llm", "rule", 0.0,
+                        "settlement UTR not found verbatim in any bank line", order_id=order["order_id"])
 
         if len(candidate_settlements) > 1:
             # `stl` here is whichever settlement was actually used above (the

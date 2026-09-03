@@ -191,18 +191,21 @@ def test_bank_line_currency_rounding_resolves_deterministically_not_via_llm():
 
 def test_unrecognized_narration_reason_does_not_overclaim_when_utr_was_seen():
     """Regression test: a bank line can contain the exact expected UTR in
-    its narration while still being disqualified (e.g. a zero-amount
+    its narration while still being disqualified by amount (e.g. a partial
     reversal line) -- the final exception used to unconditionally say
     "not found in any bank narration" regardless, which is a false claim
     exactly the kind this project exists to avoid making. Must say the
     UTR was seen but the amount didn't correspond, when that's what
-    actually happened."""
+    actually happened. (A disqualifying amount of exactly 0 is covered by
+    its own more specific zero_amount_bank_line exception type instead --
+    see test_zero_amount_bank_line_gets_its_own_specific_exception_type --
+    so this uses a nonzero, still-wrong amount.)"""
     order = {"order_id": "ORD1", "customer": "Test", "amount": 5800.0,
              "created_at": "2026-08-21T00:00:00", "razorpay_payment_id": "pay_1"}
     settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTRZERO1",
                   "amount": 5631.0, "settled_at": "2026-08-23"}
     bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTRZERO1-REVERSAL",
-                   "amount": 0.0, "value_date": "2026-08-23"}]
+                   "amount": 500.0, "value_date": "2026-08-23"}]
 
     rule_result = matcher.reconcile([order], [settlement], bank_lines)
     assert len(rule_result["needs_llm"]) == 1
@@ -213,6 +216,52 @@ def test_unrecognized_narration_reason_does_not_overclaim_when_utr_was_seen():
     assert len(unrec) == 1
     assert "not found in any bank narration" not in unrec[0]["reason"]
     assert "contains the expected UTR" in unrec[0]["reason"]
+
+
+def test_zero_amount_bank_line_gets_its_own_specific_exception_type():
+    """A bank line found by this settlement's own UTR whose amount is
+    exactly 0 (a reversed/failed transfer leg, not ambiguity) used to fall
+    into the same generic amount_mismatch/unrecognized_narration bucket as
+    any other disqualifying amount -- flagged repeatedly across several
+    real test batches as not specific enough for a finance controller.
+    Must resolve deterministically (no LLM call at all) with its own
+    named type and a reason that says exactly what's wrong."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 5800.0,
+             "created_at": "2026-08-21T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTRZERO1",
+                  "amount": 5631.0, "settled_at": "2026-08-23"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTRZERO1-REVERSAL",
+                   "amount": 0.0, "value_date": "2026-08-23"}]
+
+    result = matcher.reconcile([order], [settlement], bank_lines)
+
+    assert not result["needs_llm"]  # resolved deterministically, no LLM involvement
+    assert not result["matches"]
+    assert result["unmatched_bank_lines"] == []  # claimed, not left to double-count later
+    zero_exc = [e for e in result["exceptions"] if e["type"] == "zero_amount_bank_line"]
+    assert len(zero_exc) == 1
+    assert zero_exc[0]["bank_line_id"] == "bl1"
+    assert "Rs 0.00" in zero_exc[0]["reason"]
+
+
+def test_zero_amount_bank_line_does_not_suppress_a_sibling_duplicate_candidate():
+    """The zero-amount check falls through to the duplicate_candidate pass
+    rather than `continue`-ing out of the loop early -- a second candidate
+    settlement for the same payment_id must still be flagged even when the
+    first one hit a zero-amount bank line."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 5800.0,
+             "created_at": "2026-08-21T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement_a = {"settlement_id": "stlA", "payment_id": "pay_1", "utr": "UTRZERO1",
+                     "amount": 5631.0, "settled_at": "2026-08-23"}
+    settlement_b = {"settlement_id": "stlB", "payment_id": "pay_1", "utr": "UTROTHER1",
+                     "amount": 5631.0, "settled_at": "2026-08-23"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTRZERO1-REVERSAL",
+                   "amount": 0.0, "value_date": "2026-08-23"}]
+
+    result = matcher.reconcile([order], [settlement_a, settlement_b], bank_lines)
+
+    types = sorted(e["type"] for e in result["exceptions"])
+    assert types == ["duplicate_candidate", "zero_amount_bank_line"]
 
 
 def test_groq_is_a_registered_provider_and_falls_back_cleanly_on_error(monkeypatch):
