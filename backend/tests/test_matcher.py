@@ -43,6 +43,27 @@ def test_missing_settlement_is_an_honest_exception():
             assert exception_by_order[order["order_id"]]["type"] == "no_settlement_found"
 
 
+def test_exact_fee_boundary_resolves_consistently_regardless_of_float_noise():
+    """Regression test: two cases that are both exactly a business 3.0%
+    difference by construction can compute to different floating-point
+    values (0.03 vs 0.030000000000000065) purely from IEEE-754 division
+    noise, depending on the specific numbers involved -- a strict
+    `<= fee_tolerance_pct` comparison let one through and rejected the
+    other as amount_mismatch for the *same* real-world discrepancy. Every
+    case at the exact 3% boundary must resolve the same way."""
+    cases = [(10000.00, 9700.0), (11040.00, 10708.8), (7845.00, 7609.65), (7860.00, 7624.2)]
+    for i, (order_amt, stl_amt) in enumerate(cases):
+        order = {"order_id": f"ORD{i}", "customer": "Test", "amount": order_amt,
+                 "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": f"pay_{i}"}
+        settlement = {"settlement_id": f"stl{i}", "payment_id": f"pay_{i}", "utr": f"UTR{i}",
+                      "amount": stl_amt, "settled_at": "2026-08-02"}
+        bank_lines = [{"line_id": f"bl{i}", "narration": f"NEFT-UTR{i}-RAZORPAY",
+                       "amount": stl_amt, "value_date": "2026-08-02"}]
+        result = matcher.reconcile([order], [settlement], bank_lines)
+        assert len(result["matches"]) == 1, f"case {i} ({order_amt} vs {stl_amt}) should match at exactly 3%"
+        assert result["matches"][0]["method"] == "fuzzy"
+
+
 def test_amount_mismatch_is_flagged_not_silently_matched():
     batch, _, final = run_pipeline()
     matched_orders = {m["order_id"] for m in final["matches"]}
@@ -848,6 +869,30 @@ def test_summarize_excludes_refunded_orders_from_amount_reconciled():
     assert summary["total_amount_refunded"] == 1000.0
 
 
+def test_total_amount_refunded_counts_every_refund_not_just_matched_orders():
+    """Regression test: total_amount_refunded used to be derived from the
+    matches loop -- summing a refund's amount only if its order happened
+    to appear in result["matches"]. A refund tied to an order that ended
+    up as an exception instead (settlement genuinely didn't reconcile) or
+    tied to a payment_id with no corresponding order at all (a malformed
+    or orphaned refund record) was silently excluded from this figure --
+    while total_refund_amount_debited/undebited already summed every
+    refund unconditionally, so the two didn't agree. Money that was
+    refunded doesn't stop being refunded because the settlement side
+    failed to reconcile."""
+    orders = [{"order_id": "ORD1", "amount": 1000.0, "razorpay_payment_id": "pay_1"}]
+    result = {
+        "matches": [],  # ORD1's settlement never reconciled -- an exception, not a match
+        "exceptions": [{"type": "no_settlement_found", "order_id": "ORD1"}],
+    }
+    refunds = [
+        {"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 400.0},         # known order, unmatched
+        {"refund_id": "rfnd2", "payment_id": "pay_unknown", "amount": 250.0},   # no matching order at all
+    ]
+    summary = matcher.summarize(orders, result, refunds=refunds)
+    assert summary["total_amount_refunded"] == 650.0
+
+
 def test_generated_refund_and_partial_refund_orders_resolve_correctly_end_to_end():
     """Full pipeline sanity check: refunded/partial_refund orders seeded by
     data_gen must actually resolve as "matched" (via method "refunded" or
@@ -1357,6 +1402,28 @@ def test_refund_without_matching_bank_debit_surfaces_as_an_honest_exception():
     assert len(undebited) == 1
     assert undebited[0]["amount"] == 1000.0
     assert undebited[0]["refund_id"] == "rfnd1"
+
+
+def test_refund_debit_matches_via_payment_id_when_no_refund_id_is_uploaded():
+    """Regression test: refund_id isn't in REQUIRED_REFUND_FIELDS, so a
+    realistic uploaded refunds.csv commonly won't have one --
+    _refund_key's fallback then becomes a synthesized "payment_id_amount"
+    string that essentially never appears verbatim in a real bank
+    narration (a bank references the payment, not that compound string).
+    This silently broke refund-debit matching for every such upload,
+    always reporting "not debited" even when a genuinely matching
+    outbound line existed. payment_id alone (always present) must be
+    enough to match."""
+    refund = {"payment_id": "pay_1", "amount": 500.0}  # no refund_id at all
+    bank_lines = {"bl1": {"line_id": "bl1", "narration": "REFUND-pay_1-OUTBOUND",
+                           "amount": -500.0, "value_date": "2026-08-02"}}
+
+    matches, exceptions = matcher._match_refund_debits([refund], bank_lines, lambda *a, **kw: None)
+
+    assert not exceptions
+    assert len(matches) == 1
+    assert matches[0]["method"] == "refund_debit_matched"
+    assert bank_lines == {}  # claimed, removed from the unmatched pool
 
 
 def test_refund_debit_match_removes_the_bank_line_from_the_unmatched_pool():

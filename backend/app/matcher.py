@@ -101,7 +101,14 @@ def _find_settlement_match(stl: dict, order: dict, utr_matches: list[dict],
     # reconcile()'s non-matching branch, so a settlement against an
     # already-fully-refunded order reliably fails tolerance and becomes an
     # honest exception instead of crashing.
-    amount_diff_pct = abs(stl["amount"] - order["amount"]) / (order["amount"] or 1.0)
+    # round() absorbs IEEE-754 division noise (e.g. two cases that are both
+    # exactly a business 3.0% difference by construction can otherwise
+    # compute to 0.03 and 0.030000000000000065 respectively -- the second
+    # fails a strict <= 0.03 tolerance check by a floating-point artifact,
+    # not a real amount difference). 6 decimal places is 0.0001% precision,
+    # far finer than any real currency distinction, so this only removes
+    # float noise -- it does not loosen the tolerance itself.
+    amount_diff_pct = round(abs(stl["amount"] - order["amount"]) / (order["amount"] or 1.0), 6)
     date_drift = abs((_parse_date(stl["settled_at"]) - _parse_date(order["created_at"])).days)
 
     # Settlement amounts can carry more decimal precision than a bank
@@ -169,9 +176,21 @@ def _match_refund_debits(refunds: list[dict], unmatched_bank: dict[str, dict],
     matches, exceptions = [], []
     for r in refunds:
         key = _refund_key(r)
+        # `key` is refund_id when present (synthetic data always includes
+        # it, embedded directly in the narration) -- but refund_id isn't in
+        # REQUIRED_REFUND_FIELDS, and a realistic uploaded refunds.csv
+        # commonly won't have one. The composite payment_id_amount fallback
+        # key used in that case will essentially never appear verbatim in
+        # a real bank narration (a bank references the payment, not a
+        # synthesized "payment_id_amount" string), which silently broke
+        # refund-debit matching for every CSV upload without a refund_id
+        # column -- always reporting "not debited" even when a matching
+        # outbound line genuinely existed. payment_id is always present
+        # (REQUIRED_REFUND_FIELDS) and is the realistic identifier a real
+        # bank narration would actually reference.
         hit = next((b for b in unmatched_bank.values()
                     if b["amount"] < 0 and abs(-b["amount"] - r["amount"]) < 0.01
-                    and key in b["narration"]), None)
+                    and (key in b["narration"] or r["payment_id"] in b["narration"])), None)
         if hit:
             unmatched_bank.pop(hit["line_id"], None)
             matches.append({
@@ -452,7 +471,10 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
             stl = candidate_settlements[0]
             match_order, pre, post = _net_refund_for_settlement(order, stl, order_refunds)
             refund_suffix = _refund_suffix(pre, post)
-            amount_diff_pct = abs(stl["amount"] - match_order["amount"]) / (match_order["amount"] or order["amount"] or 1.0)
+            # Same float-noise guard as _find_settlement_match's identical
+            # comparison -- see the comment there.
+            amount_diff_pct = round(
+                abs(stl["amount"] - match_order["amount"]) / (match_order["amount"] or order["amount"] or 1.0), 6)
             if amount_diff_pct > fee_tolerance_pct:
                 # amount is genuinely off, not fee-sized -> not an LLM question
                 exceptions.append({
@@ -785,16 +807,24 @@ def summarize(orders: list[dict], result: dict, refunds: list[dict] | None = Non
                 refund_total_by_order_id[order_id] = refund_total_by_payment[payment_id]
 
     total_amount_matched = 0.0
-    total_amount_refunded = 0.0
     for m in result["matches"]:
         order_amount = amount_by_order_id.get(m["order_id"], 0.0)
         refund_amount = refund_total_by_order_id.get(m["order_id"], 0.0)
-        total_amount_refunded += refund_amount
         if m["method"] == "refunded":
             continue  # fully refunded -- zero net settlement money, correctly excluded
         total_amount_matched += max(round(order_amount - refund_amount, 2), 0.0)
     total_amount_matched = round(total_amount_matched, 2)
-    total_amount_refunded = round(total_amount_refunded, 2)
+
+    # Every refund's amount, independent of whether its order matched,
+    # became an exception, or the refund's payment_id doesn't correspond to
+    # any known order at all -- money that was refunded doesn't stop being
+    # refunded because the settlement side failed to reconcile. Deliberately
+    # NOT derived from the matches loop above (that used to silently
+    # exclude refunds tied to an unmatched/excepted order or an unknown
+    # payment_id, understating this figure) -- consistent with
+    # total_refund_amount_debited/undebited below, which already sum every
+    # refund unconditionally and this must equal the sum of.
+    total_amount_refunded = round(sum(r["amount"] for r in (refunds or [])), 2)
 
     # One order can carry more than one exception (e.g. a duplicate
     # settlement flagged alongside the order's own primary outcome) -- sum
