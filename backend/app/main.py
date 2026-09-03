@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
 import time
@@ -163,8 +164,7 @@ def _coerce_settlement_payment_ids(rows: list[dict]) -> list[dict]:
                 # A CSV cell holding a JSON array (e.g. exported by a tool
                 # that serializes list-valued fields that way) is a
                 # plausible real-world variant of "multiple payment_ids in
-                # one cell" -- fall back to comma-splitting only if it
-                # doesn't actually parse as JSON, rather than silently
+                # one cell" -- try that first, rather than silently
                 # producing garbage IDs like '["pay_1"' from a naive split.
                 try:
                     parsed = json.loads(raw)
@@ -172,6 +172,19 @@ def _coerce_settlement_payment_ids(rows: list[dict]) -> list[dict]:
                         ids = [str(p).strip() for p in parsed if str(p).strip()]
                 except (ValueError, TypeError):
                     pass
+                if ids is None:
+                    # Python's str(list) repr uses single quotes
+                    # ("['pay_1', 'pay_2']"), which isn't valid JSON --
+                    # a plausible export artifact from a tool that
+                    # stringified a Python list directly instead of using
+                    # json.dumps. ast.literal_eval only evaluates literals
+                    # (no arbitrary code execution), safe on untrusted input.
+                    try:
+                        parsed = ast.literal_eval(raw)
+                        if isinstance(parsed, list):
+                            ids = [str(p).strip() for p in parsed if str(p).strip()]
+                    except (ValueError, SyntaxError, TypeError):
+                        pass
             if ids is None:
                 ids = [p.strip() for p in raw.split(",") if p.strip()]
             if ids:

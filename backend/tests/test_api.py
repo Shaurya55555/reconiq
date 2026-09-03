@@ -239,6 +239,41 @@ def test_run_upload_endpoint_accepts_a_json_array_payment_ids_column():
     assert methods == {"ORD1": "batch_settlement", "ORD2": "batch_settlement"}
 
 
+def test_run_upload_endpoint_accepts_a_python_repr_style_payment_ids_column():
+    """A CSV cell can also hold a Python str(list) repr (single-quoted,
+    e.g. "['pay_1', 'pay_2']") instead of JSON or a bare comma-delimited
+    string -- a plausible export artifact from a tool that stringified a
+    Python list directly instead of using json.dumps. json.loads rejects
+    single quotes, so this used to fall through to the naive comma-split
+    fallback and produce garbage IDs like "['pay_1'" that match nothing,
+    silently turning a real batch settlement into no_settlement_found
+    exceptions with no error. Must parse via ast.literal_eval and resolve
+    identically to the JSON-array and comma-delimited cases."""
+    orders = [
+        {"order_id": "ORD1", "amount": 600.0, "razorpay_payment_id": "pay_1",
+         "created_at": "2026-08-01T00:00:00", "customer": "A"},
+        {"order_id": "ORD2", "amount": 400.0, "razorpay_payment_id": "pay_2",
+         "created_at": "2026-08-01T00:00:00", "customer": "B"},
+    ]
+    settlements = [
+        {"settlement_id": "stl1", "payment_id": "pay_1", "payment_ids": "['pay_1', 'pay_2']",
+         "utr": "UTR999888777", "amount": 1000.0, "settled_at": "2026-08-02"},
+    ]
+    bank_lines = [
+        {"line_id": "bl1", "narration": "NEFT-UTR999888777-RAZORPAY",
+         "amount": 1000.0, "value_date": "2026-08-02"},
+    ]
+
+    res = client.post("/api/run-upload", json={
+        "orders": orders, "settlements": settlements, "bank_lines": bank_lines,
+    })
+    assert res.status_code == 200
+    body = res.json()
+    assert body["summary"]["matched"] == 2
+    methods = {m["order_id"]: m["method"] for m in body["matches"]}
+    assert methods == {"ORD1": "batch_settlement", "ORD2": "batch_settlement"}
+
+
 def test_run_upload_endpoint_accepts_an_is_instant_column_with_wider_fee_tolerance():
     """A CSV upload's settlement row can carry an optional is_instant
     column (arrives as a string like "true" or "1"), coerced to a real
