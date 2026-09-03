@@ -132,6 +132,7 @@
   .tag.exact { background: #ECFDF5; color: var(--good); }
   .tag.fuzzy { background: #FFFBEB; color: var(--warn); }
   .tag.llm { background: #EFF6FF; color: #2563EB; }
+  .tag.heuristic_fallback { background: #FFFBEB; color: var(--warn); }
   .tag.human_override { background: #F5F3FF; color: #7C3AED; }
   .tag.group_split { background: #ECFEFF; color: #0891B2; }
   .tag.batch_settlement { background: #F0FDF4; color: #16A34A; }
@@ -400,6 +401,7 @@
   [data-theme="dark"] .tag.exact { background: #123a35; color: var(--good); }
   [data-theme="dark"] .tag.fuzzy { background: #3a3312; color: var(--warn); }
   [data-theme="dark"] .tag.llm { background: #1a2b4a; color: #7aa2f7; }
+  [data-theme="dark"] .tag.heuristic_fallback { background: #3a3312; color: var(--warn); }
   [data-theme="dark"] .tag.human_override { background: #2a1a3a; color: #c792ea; }
   [data-theme="dark"] .tag.group_split { background: #123449; color: #56c8e0; }
   [data-theme="dark"] .tag.batch_settlement { background: #1a3324; color: #7ee08a; }
@@ -815,6 +817,15 @@ function formatDuration(totalSeconds) {
   return `${minutes}m ${Math.round(seconds)}s`;
 }
 const tagFor = (method) => `<span class="tag ${esc(method)}">${esc(method)}</span>`;
+// A "llm" method tag alone doesn't distinguish a real model call from the
+// offline heuristic standing in for one -- collapsing both into one blue
+// "llm" badge overstates what actually happened for a heuristic-fallback
+// row. llm_resolution_source (present on both matches and
+// unrecognized_narration exceptions) makes that visible at the table
+// level, not just in the evidence drawer.
+const tagForMatch = (m) => m.method === "llm" && m.llm_resolution_source === "heuristic_fallback"
+  ? `<span class="tag heuristic_fallback">llm (heuristic)</span>`
+  : tagFor(m.method);
 
 // SVG fill colors can't read CSS custom properties directly, so these
 // carry their own light/dark pair, picked via isDarkTheme() at render time.
@@ -1176,7 +1187,33 @@ function showEvidence(orderId, bankLineId) {
     : "";
 
   const reasoning = match ? match.note : (exceptionsFor.map(e => e.reason).join(" ") || "No reasoning recorded.");
-  const aiInvolved = match ? (match.method === "llm" ? "Yes" : (match.method === "human_override" ? "Human reviewer" : "No")) : "No (unresolved)";
+
+  // AI involvement has three genuinely different flavors, not two -- a
+  // real model call, the offline heuristic standing in for one (provider
+  // failure or the batch's time budget running out), and rules never
+  // deferring to AI at all. Collapsing "heuristic fallback" into "Yes,
+  // AI resolved" would overstate what actually happened; llm_resolution_source
+  // (attached to both matches and unrecognized_narration exceptions by
+  // apply_confidence_threshold) is what makes the distinction visible
+  // here instead of buried in free-text reasoning.
+  function aiInvolvedTag(source) {
+    if (source === "llm") return `<span class="tag llm">AI resolved</span>`;
+    if (source === "heuristic_fallback") return `<span class="tag heuristic_fallback">AI unavailable &mdash; offline heuristic</span>`;
+    return null;
+  }
+  let aiInvolvedHtml;
+  if (match && match.method === "human_override") {
+    aiInvolvedHtml = `<span class="tag human_override">Human reviewer</span>`;
+  } else if (match && match.method === "llm") {
+    aiInvolvedHtml = aiInvolvedTag(match.llm_resolution_source) || `<span class="tag llm">AI resolved</span>`;
+  } else if (match) {
+    aiInvolvedHtml = "No &mdash; resolved by deterministic rules, never deferred to AI";
+  } else {
+    const excSource = exceptionsFor.map(e => e.llm_resolution_source).find(Boolean);
+    aiInvolvedHtml = aiInvolvedTag(excSource)
+      ? `${aiInvolvedTag(excSource)} &mdash; reasoned, but declined to guess`
+      : "No &mdash; resolved by deterministic rules, never deferred to AI";
+  }
 
   // An order can be matched AND still carry a separate flagged exception
   // (e.g. a duplicate settlement alongside its primary match) -- show
@@ -1191,7 +1228,7 @@ function showEvidence(orderId, bankLineId) {
     ${verdictHtml}
     ${tableHtml}
     <div class="evidence-section-label">AI involved?</div>
-    <div>${aiInvolved}</div>
+    <div>${aiInvolvedHtml}</div>
     ${alsoFlaggedHtml}
     <div class="evidence-section-label">Reasoning</div>
     <div class="evidence-reasoning">${esc(reasoning)}</div>
@@ -1427,7 +1464,7 @@ function renderMatches(matches) {
            <button class="secondary reject-btn" data-order-id="${esc(m.order_id)}">Reject</button>`
         : "";
       const whyBtn = `<button class="secondary why-btn" data-order-id="${esc(m.order_id)}">Why?</button>`;
-      return `<tr><td>${tagFor(m.method)}</td><td>${esc(m.order_id)}</td><td>${m.confidence}</td><td>${esc(m.note)}</td><td>${whyBtn}</td><td>${reviewCell}</td></tr>`;
+      return `<tr><td>${tagForMatch(m)}</td><td>${esc(m.order_id)}</td><td>${m.confidence}</td><td>${esc(m.note)}</td><td>${whyBtn}</td><td>${reviewCell}</td></tr>`;
     }).join("");
     html += `<h3 style="font-size:13px;color:var(--muted);margin:14px 0 6px">${esc(method)} (${list.length})</h3>
       <table><thead><tr><th>Method</th><th>Order</th><th>Confidence</th><th>Note</th><th></th><th>Review</th></tr></thead>
@@ -1455,7 +1492,7 @@ function renderAudit(trail) {
   const rows = recent.map(a => `
     <tr>
       <td>${esc(a.step)}</td>
-      <td>${tagFor(a.decision === "exception" ? "exception" : a.method)}</td>
+      <td>${a.decision !== "exception" && a.method === "llm" ? tagForMatch(a) : tagFor(a.decision === "exception" ? "exception" : a.method)}</td>
       <td>${a.confidence}</td>
       <td>${esc(a.order_id ?? a.bank_line_id ?? "-")}</td>
       <td>${esc(a.note)}</td>
