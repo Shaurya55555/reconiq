@@ -42,12 +42,19 @@ def _net_refund_for_settlement(order: dict, stl: dict, order_refunds: list[dict]
     is a separate, later cash event: the settlement was genuinely
     legitimate at its full amount, and a later refund must never make it
     look short. Returns (match_order, pre_settlement_refund, post_settlement_refund).
+
+    `refunded_at` is optional (REQUIRED_REFUND_FIELDS asks only for
+    payment_id and amount) -- a refund with unknown timing is treated as
+    pre-settlement (always netted), matching how the no-settlement-exists
+    path elsewhere sums refunds with no date check at all, rather than
+    guessing a date or crashing on the missing key.
     """
     settled_at = _parse_date(stl["settled_at"])
-    pre = round(sum(r["amount"] for r in order_refunds
-                     if _parse_date(r["refunded_at"]) <= settled_at), 2)
-    post = round(sum(r["amount"] for r in order_refunds
-                      if _parse_date(r["refunded_at"]) > settled_at), 2)
+    def is_pre_settlement(r: dict) -> bool:
+        refunded_at = r.get("refunded_at")
+        return not refunded_at or _parse_date(refunded_at) <= settled_at
+    pre = round(sum(r["amount"] for r in order_refunds if is_pre_settlement(r)), 2)
+    post = round(sum(r["amount"] for r in order_refunds if not is_pre_settlement(r)), 2)
     if pre == 0:
         return order, 0.0, post
     net_amount = round(max(order["amount"] - pre, 0.0), 2)
@@ -87,7 +94,14 @@ def _find_settlement_match(stl: dict, order: dict, utr_matches: list[dict],
     """
     effective_fee_tolerance_pct = (INSTANT_SETTLEMENT_FEE_TOLERANCE_PCT
                                     if stl.get("is_instant") else fee_tolerance_pct)
-    amount_diff_pct = abs(stl["amount"] - order["amount"]) / order["amount"]
+    # order["amount"] is the *netted* amount here (order minus any
+    # pre-settlement refunds) and can legitimately be 0 for an over-refund
+    # (refunds summing to more than the order was worth) -- the 1.0
+    # fallback matches the guard already used for this same case in
+    # reconcile()'s non-matching branch, so a settlement against an
+    # already-fully-refunded order reliably fails tolerance and becomes an
+    # honest exception instead of crashing.
+    amount_diff_pct = abs(stl["amount"] - order["amount"]) / (order["amount"] or 1.0)
     date_drift = abs((_parse_date(stl["settled_at"]) - _parse_date(order["created_at"])).days)
 
     single = next((b for b in utr_matches if b["amount"] == stl["amount"]), None)

@@ -994,6 +994,32 @@ def test_refund_before_settlement_still_nets_as_before():
     assert "pre-settlement refund" in result["matches"][0]["note"]
 
 
+def test_refund_missing_refunded_at_nets_as_pre_settlement_instead_of_crashing():
+    """Regression test: refunded_at is optional (REQUIRED_REFUND_FIELDS
+    asks only for payment_id and amount), but _net_refund_for_settlement
+    used to do a bare r["refunded_at"] lookup and crash the whole request
+    with a 500 on any uploaded refund that omitted it -- including a
+    completely ordinary partial refund, nothing to do with over-refunds.
+    A refund with unknown timing must net as pre-settlement (matching the
+    no-settlement-exists path, which sums refunds with no date check at
+    all), not raise."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    refund = {"payment_id": "pay_1", "amount": 400.0}  # no refunded_at at all
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
+                  "amount": 600.0, "settled_at": "2026-08-02"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT",
+                   "amount": 600.0, "value_date": "2026-08-02"}]
+
+    result = matcher.reconcile([order], [settlement], bank_lines, refunds=[refund])  # must not raise
+
+    assert len(result["matches"]) == 1
+    assert "pre-settlement refund" in result["matches"][0]["note"]
+    # no outbound bank line for the refund was provided -- a separate,
+    # expected refund_not_debited exception, not the thing under test here.
+    assert [e["type"] for e in result["exceptions"]] == ["refund_not_debited"]
+
+
 def test_refund_exactly_on_settlement_date_counts_as_pre_settlement():
     """A refund dated the same day as settlement is treated as pre-settlement
     (<=), matching the intuition that Razorpay had the same-day chance to
@@ -1115,6 +1141,36 @@ def test_post_settlement_over_refund_flags_the_refund_but_never_the_settlement()
     over = [e for e in result["exceptions"] if e["type"] == "refund_amount_exceeds_order"]
     assert len(over) == 1
     assert over[0]["amount"] == 500.0
+
+
+def test_pre_settlement_over_refund_does_not_crash_the_matching_pass():
+    """Regression test: every existing over-refund test uses a
+    *post*-settlement refund, which never reaches _net_refund_for_settlement's
+    netting math. A *pre*-settlement over-refund (refunded_at before
+    settled_at, refund total exceeding the order amount) nets the order
+    amount down to 0 via max(order_amount - pre, 0.0) -- and
+    _find_settlement_match then divided by that netted amount with no zero
+    guard, crashing the whole request with a ZeroDivisionError on real
+    over-refund data. Must resolve to an honest exception instead."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR555000111",
+                  "amount": 1000.0, "settled_at": "2026-08-10"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR555000111-RAZORPAY SETTLEMENT",
+                   "amount": 1000.0, "value_date": "2026-08-10"}]
+    refunds = [
+        {"refund_id": "rfnd1", "payment_id": "pay_1", "amount": 700.0,
+         "refunded_at": "2026-08-02T00:00:00"},  # both before settled_at ->
+        {"refund_id": "rfnd2", "payment_id": "pay_1", "amount": 600.0,
+         "refunded_at": "2026-08-03T00:00:00"},  # pre-settlement netting
+    ]
+
+    result = matcher.reconcile([order], [settlement], bank_lines, refunds=refunds)  # must not raise
+
+    assert not result["matches"]
+    over = [e for e in result["exceptions"] if e["type"] == "refund_amount_exceeds_order"]
+    assert len(over) == 1
+    assert over[0]["amount"] == 300.0
 
 
 def test_over_refund_adds_only_the_excess_to_amount_at_risk_not_the_whole_order():
