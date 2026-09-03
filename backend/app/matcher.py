@@ -367,7 +367,12 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
         total_refund = round(sum(r["amount"] for r in order_refunds), 2)
 
         if not candidate_settlements:
-            if total_refund >= order["amount"] - 1.0:
+            # total_refund > 0 guards against a near-zero order amount
+            # (<= Re 1, the tolerance below) with zero actual refund
+            # records -- 0 >= 0 - 1.0 is trivially true, which would
+            # otherwise fabricate a "fully refunded" claim no refund
+            # record actually supports.
+            if total_refund > 0 and total_refund >= order["amount"] - 1.0:
                 # No settlement exists, but a refund fully explains why --
                 # Razorpay never generates a settlement for a fully refunded
                 # payment. This is a correct, resolved outcome, not a gap.
