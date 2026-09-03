@@ -104,7 +104,14 @@ def _find_settlement_match(stl: dict, order: dict, utr_matches: list[dict],
     amount_diff_pct = abs(stl["amount"] - order["amount"]) / (order["amount"] or 1.0)
     date_drift = abs((_parse_date(stl["settled_at"]) - _parse_date(order["created_at"])).days)
 
-    single = next((b for b in utr_matches if b["amount"] == stl["amount"]), None)
+    # Settlement amounts can carry more decimal precision than a bank
+    # statement's 2-decimal display (e.g. a settlement API returning
+    # 4850.125 against a bank line rounded to 4850.13) -- exact equality
+    # would treat that as "no candidate" and force an otherwise-trivial
+    # case through the expensive LLM/heuristic fallback. 0.01 matches the
+    # same currency-rounding tolerance already used for the group-sum
+    # comparison just below, not the percentage-based fee tolerance.
+    single = next((b for b in utr_matches if abs(b["amount"] - stl["amount"]) <= 0.01), None)
     if single:
         if amount_diff_pct < 0.001:
             if date_drift <= date_drift_ok_days:
@@ -468,6 +475,14 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
                     # REQUIRED_ORDER_FIELDS -- uploaded orders.csv from a
                     # real user has no reason to include it
                     "customer": order.get("customer", "unknown"),
+                    # utr_matches here can be non-empty: a bank line's
+                    # narration can contain this exact UTR while still
+                    # being disqualified (wrong amount, e.g. a reversal
+                    # line). The final exception text must not claim the
+                    # UTR was "not found" when it plainly was -- that's
+                    # exactly the kind of overclaim this project exists
+                    # to avoid making.
+                    "utr_seen_in_narration": bool(utr_matches),
                 })
                 log("match", "deferred_to_llm", "rule", 0.0,
                     "settlement UTR not found verbatim in any bank line", order_id=order["order_id"])
@@ -640,11 +655,16 @@ def apply_confidence_threshold(rule_result: dict, case_verdicts: list[tuple[dict
             })
         else:
             reason = (verdict or {}).get("reasoning", "LLM resolver returned no confident candidate")
+            if case.get("utr_seen_in_narration"):
+                utr_clause = (f"A bank line's narration contains the expected UTR "
+                               f"{case['expected_utr']}, but its amount doesn't correspond to "
+                               f"the expected {case['expected_amount']}")
+            else:
+                utr_clause = f"Expected UTR {case['expected_utr']} not found in any bank narration"
             exceptions.append({
                 "type": "unrecognized_narration", "order_id": case["order_id"],
                 "settlement_id": case["settlement_id"],
-                "reason": f"Expected UTR {case['expected_utr']} not found in any bank "
-                          f"narration; LLM could not confidently resolve it either. {reason}",
+                "reason": f"{utr_clause}; LLM could not confidently resolve it either. {reason}",
             })
             audit.append({
                 "step": "llm_resolve", "decision": "exception", "method": "llm",

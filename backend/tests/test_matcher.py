@@ -61,6 +61,56 @@ def test_garbled_narration_is_deferred_to_llm_layer():
             assert order["order_id"] in deferred_orders
 
 
+def test_bank_line_currency_rounding_resolves_deterministically_not_via_llm():
+    """Regression test: a settlement can carry more decimal precision than
+    a bank statement's 2-decimal display (e.g. 4850.125 vs a bank line
+    rounded to 4850.13) -- the single-candidate lookup used exact equality
+    (b["amount"] == stl["amount"]), so even a Rs 0.005 rounding difference
+    made it treat the correct bank line as "no candidate" and forced an
+    otherwise-trivial case through the expensive LLM/heuristic fallback
+    instead of resolving deterministically. Must resolve as a plain fuzzy
+    match with zero LLM involvement."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 5000.0,
+             "created_at": "2026-08-21T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTR3DP1",
+                  "amount": 4850.125, "settled_at": "2026-08-23"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR3DP1-RAZORPAY",
+                   "amount": 4850.13, "value_date": "2026-08-23"}]
+
+    result = matcher.reconcile([order], [settlement], bank_lines)
+
+    assert not result["needs_llm"]
+    assert len(result["matches"]) == 1
+    assert result["matches"][0]["method"] == "fuzzy"
+    assert result["matches"][0]["bank_line_id"] == "bl1"
+
+
+def test_unrecognized_narration_reason_does_not_overclaim_when_utr_was_seen():
+    """Regression test: a bank line can contain the exact expected UTR in
+    its narration while still being disqualified (e.g. a zero-amount
+    reversal line) -- the final exception used to unconditionally say
+    "not found in any bank narration" regardless, which is a false claim
+    exactly the kind this project exists to avoid making. Must say the
+    UTR was seen but the amount didn't correspond, when that's what
+    actually happened."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 5800.0,
+             "created_at": "2026-08-21T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "stl1", "payment_id": "pay_1", "utr": "UTRZERO1",
+                  "amount": 5631.0, "settled_at": "2026-08-23"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTRZERO1-REVERSAL",
+                   "amount": 0.0, "value_date": "2026-08-23"}]
+
+    rule_result = matcher.reconcile([order], [settlement], bank_lines)
+    assert len(rule_result["needs_llm"]) == 1
+    assert rule_result["needs_llm"][0]["utr_seen_in_narration"] is True
+
+    final = matcher.apply_llm_resolutions(rule_result, llm_resolve_fn=None)
+    unrec = [e for e in final["exceptions"] if e["type"] == "unrecognized_narration"]
+    assert len(unrec) == 1
+    assert "not found in any bank narration" not in unrec[0]["reason"]
+    assert "contains the expected UTR" in unrec[0]["reason"]
+
+
 def test_groq_is_a_registered_provider_and_falls_back_cleanly_on_error(monkeypatch):
     """Groq (OpenAI-compatible API, reuses the openai SDK dependency) is
     the new recommended default -- see .env.example -- alongside the
