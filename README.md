@@ -20,8 +20,14 @@ ReconIQ closes that loop automatically on a batch of orders:
 
 1. **Exact match** — settlement UTR found verbatim in a bank line, amount
    matches to the paisa.
-2. **Fuzzy match** — UTR found, but amount differs by a plausible Razorpay
-   fee (≤3%) or the settlement date drifted.
+2. **Fuzzy match** — UTR found, and amount differs by a plausible Razorpay
+   fee (≤3%), and the settlement date is within the reviewer's configured
+   `date_drift_ok_days` window (default 3 days). `date_drift_ok_days` is a
+   hard eligibility boundary, not a confidence hint: a settlement whose
+   UTR and amount both check out but which arrived *outside* that window
+   is never auto-matched, no matter how good the rest of the evidence is
+   — it surfaces as an honest `date_drift_exceeded` exception instead
+   (see "Honest exceptions" below).
 3. **Beyond 1:1 — group matching, both directions.** ReconIQ handles
    1:1, **1:N**, and **N:1** (deliberately not claiming arbitrary
    many-to-many — see below for the precise distinction):
@@ -50,9 +56,10 @@ ReconIQ closes that loop automatically on a batch of orders:
    the auto-clearing is.
 5. **Honest exceptions** — anything still unresolved is surfaced with a
    reason code (`no_settlement_found`, `amount_mismatch`,
-   `duplicate_candidate`, `duplicate_order_reference`,
-   `unrecognized_narration`, `unrecognized_bank_line`), never silently
-   dropped.
+   `date_drift_exceeded`, `zero_amount_bank_line`, `duplicate_candidate`,
+   `duplicate_order_reference`, `unrecognized_narration`,
+   `unrecognized_bank_line`, `refund_not_debited`,
+   `refund_amount_exceeds_order`, `chargeback`), never silently dropped.
 6. **Human-in-the-loop override** — a reviewer can accept a shaky match,
    reject one back to an exception, or manually pair an exception with an
    unclaimed bank line via `POST /api/override`, logged distinctly as
@@ -345,7 +352,7 @@ flowchart TD
     B[Bank lines] --> N
     R[Refunds - optional] --> N
     N --> D1[Pass 1: Exact match]
-    D1 --> D2[Pass 2: Fuzzy match - fee / date drift]
+    D1 --> D2[Pass 2: Fuzzy match - fee within tolerance and date within policy window]
     D2 --> D3[Pass 3: Group match - 1:N and N:1]
     D3 --> D4[Pass 4: Refund-aware match - pre vs post settlement]
     D4 -->|still unresolved| LLM[LLM resolver - Groq]
@@ -454,6 +461,30 @@ code that was supposed to prevent it. Fixed by explicitly emitting a
 such a group, and added
 `test_duplicate_payment_id_across_orders_is_an_explicit_exception_not_a_silent_drop`
 to keep it caught.
+
+A third one only surfaced under deliberate adversarial stress testing —
+a hand-built 200-order batch specifically seeded with edge cases,
+including a bank line that was an outbound debit whose magnitude matched
+a settlement's expected amount, with that settlement's own UTR in the
+narration. Every deterministic rule pass correctly rejected it (the
+±0.01 paisa-rounding tolerance fails hard against a sign flip), so it
+fell through to the LLM resolver — whose candidate pool had no
+credit-eligibility filter, and whose amount-window narrowing fell back
+to the *unfiltered* candidate list once the debit line was the only
+thing sharing that UTR. The live model matched it anyway, at 0.99–1.0
+confidence, its own reasoning literally citing the negative amount as
+"matching." Exactly the confidently-wrong failure this project exists to
+prevent, and it took an adversarial dataset — not the friendly synthetic
+generator — to expose it. Fixed by adding one predicate,
+`_is_settlement_credit_candidate`, applied at every point a bank line
+becomes settlement-match evidence (see "A settlement match requires a
+genuine credit, always" above), plus a defense-in-depth check at
+acceptance time so a future candidate-building bug can't reintroduce the
+same failure. 5 new regression tests, one of them a deliberately
+"gullible" stub resolver that matches on magnitude alone (mirroring the
+real model's observed behavior) to prove the debit line is never even
+*offered* as a candidate, not just that one resolver happens to decline
+it.
 
 ## Offline Razorpay Settlement API adapter
 
@@ -629,6 +660,27 @@ pattern as cash position above.
   `matcher.INSTANT_SETTLEMENT_FEE_TOLERANCE_PCT` (5%) instead, so a
   legitimately higher instant-settlement fee doesn't get misflagged as
   `amount_mismatch`.
+
+**A settlement match requires a genuine credit, always.** A settlement
+represents money the merchant *received* — a bank line's `direction`
+being `debit` (or, equivalently, a negative amount) is never valid
+evidence that one cleared, no matter how closely its magnitude and
+narration UTR line up with what's expected. This is enforced at a single
+choke point (`matcher._is_settlement_credit_candidate`) applied
+everywhere a bank line becomes match evidence — the single-line and
+group-sum rule passes, batch settlements, and the LLM/heuristic
+candidate pool alike — plus a defense-in-depth check at the point an
+LLM/heuristic verdict is actually accepted. Found the hard way: an
+adversarial regression batch (bank lines whose amount magnitude equalled
+a settlement's expected amount, but were outbound debits) got matched at
+0.99–1.0 confidence by the live LLM before this guarantee existed, citing
+the negative amount as "matching" in its own reasoning — exactly the
+confidently-wrong failure this project exists to prevent, since a debit
+proves nothing about whether the corresponding credit ever happened. A
+zero-amount bank line found by a settlement's UTR is handled distinctly
+too — usually a reversed/failed transfer leg, not generic ambiguity — as
+its own deterministic `zero_amount_bank_line` exception, resolved
+without ever involving the LLM.
 
 **11. Empirical confidence-threshold calibration.** `LLM_CONFIDENCE_THRESHOLD`
 (default `0.6`) was always a reasonable starting point, not an
