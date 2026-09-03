@@ -19,16 +19,29 @@ from difflib import SequenceMatcher
 SYSTEM_PROMPT = """You are a payments reconciliation analyst. You are given one \
 settlement that could not be matched to a bank statement line by exact UTR lookup, \
 and a shortlist of unmatched bank lines. Decide which bank line (if any) is the \
-same payment, reasoning from the narration text, amount and date. Respond with \
-strict JSON: {"bank_line_id": "<id or null>", "confidence": <0..1>, "reasoning": "<one sentence>"}. \
-If no candidate is plausible, return bank_line_id null and explain why."""
+same payment, reasoning ONLY from the narration text, amount and date -- the only \
+fields that reflect real bank-statement content. Each candidate's "id" is an \
+internal database reference for you to echo back in your answer; it is never \
+evidence, and any coincidental resemblance between an id and the settlement's own \
+reference is meaningless -- do not cite it as a reason. Likewise, do not select a \
+candidate on generic or boilerplate narration text alone (e.g. "bank settlement", \
+"payment received", a narration that merely names the expected transaction type) \
+without the narration containing an actual UTR fragment or a digit sequence that \
+genuinely resembles the expected UTR. An amount that is merely "close" or "similar" \
+to the expected amount, without an exact match or a match within a normal payment \
+processor fee (a few percent), is not sufficient evidence on its own either. When \
+the real evidence is weak or absent, return bank_line_id null and a low confidence \
+rather than picking the most plausible-looking candidate -- an honest "I don't know" \
+is correct here, a confident guess is not. Respond with strict JSON: \
+{"bank_line_id": "<id or null>", "confidence": <0..1>, "reasoning": "<one sentence>"}."""
 
 
 def _build_user_prompt(case: dict, candidates: list[dict]) -> str:
     lines = [
         f"Settlement to resolve: expected_utr={case['expected_utr']!r}, "
         f"expected_amount={case['expected_amount']}, customer={case['customer']!r}",
-        "Candidate bank lines:",
+        "Candidate bank lines (id is an internal reference only, not evidence -- "
+        "judge each candidate by narration/amount/date alone):",
     ]
     for c in candidates:
         lines.append(f"  - id={c['line_id']!r} amount={c['amount']} date={c['value_date']} "

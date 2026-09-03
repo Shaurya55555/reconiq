@@ -1572,3 +1572,22 @@ def test_heuristic_answer_covers_method_breakdown_question():
                "by_method": {"exact": 2, "llm": 1}}
     answer = llm_resolver._heuristic_answer("how were these matched?", summary, [], [])
     assert "exact" in answer and "llm" in answer
+
+
+def test_llm_prompt_warns_against_id_coincidence_and_weak_narration_evidence():
+    """Regression test: a real live run surfaced the LLM confidently
+    clearing candidates on fabricated evidence -- e.g. "its id matches the
+    settlement id 117" (a candidate's internal line_id is an arbitrary
+    database reference, never real transaction evidence, but the prompt
+    handed it over with no caveat) and "the narration matches the expected
+    settlement type" (generic boilerplate text, not an actual UTR/amount
+    match). Locks in that the prompt explicitly warns against both
+    failure modes, so a future prompt edit can't silently drop the
+    guardrail that fixed this."""
+    assert "never" in llm_resolver.SYSTEM_PROMPT.lower() and "evidence" in llm_resolver.SYSTEM_PROMPT.lower()
+    assert "boilerplate" in llm_resolver.SYSTEM_PROMPT.lower()
+    prompt = llm_resolver._build_user_prompt(
+        {"expected_utr": "UTR1", "expected_amount": 100.0, "customer": "Test"},
+        [{"line_id": "bl1", "amount": 100.0, "value_date": "2026-08-01", "narration": "n"}],
+    )
+    assert "internal reference only" in prompt
