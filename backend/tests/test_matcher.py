@@ -394,6 +394,54 @@ def test_ground_truth_accuracy_is_high_and_misclassifications_are_explained():
         assert row["expected_outcome"] != row["actual_outcome"] or row["actual_exception_type"] is not None
 
 
+def test_duplicate_candidate_flagged_even_when_the_matched_settlement_is_not_first_in_list():
+    """Regression test: the duplicate_candidate check used to hardcode
+    candidate_settlements[0] as "the one already accounted for" -- correct
+    only when the settlement that actually finds a bank line happens to be
+    first in list order. If the second settlement is the one that matches
+    (its sibling's UTR simply isn't in any bank line), the sibling used to
+    vanish silently: neither matched nor flagged as its own exception."""
+    order = {"order_id": "ORD1", "customer": "Test", "amount": 4850.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    # settlement A is listed FIRST but has no bank line at all; settlement B
+    # is listed second and does -- the bug depended on this exact ordering.
+    settlement_a = {"settlement_id": "setl_A", "payment_id": "pay_1", "utr": "UTR_A",
+                     "amount": 4850.0, "settled_at": "2026-08-02"}
+    settlement_b = {"settlement_id": "setl_B", "payment_id": "pay_1", "utr": "UTR_B",
+                     "amount": 4850.0, "settled_at": "2026-08-02"}
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT-UTR_B-RAZORPAY",
+                   "amount": 4850.0, "value_date": "2026-08-02"}]
+
+    result = matcher.reconcile([order], [settlement_a, settlement_b], bank_lines)
+
+    matched_settlement_ids = {m["settlement_id"] for m in result["matches"]}
+    assert matched_settlement_ids == {"setl_B"}
+    dup_exceptions = [e for e in result["exceptions"] if e["type"] == "duplicate_candidate"]
+    assert len(dup_exceptions) == 1
+    assert dup_exceptions[0]["settlement_id"] == "setl_A"
+
+
+def test_llm_deferral_does_not_require_a_customer_field_on_the_order():
+    """A real upload's orders.csv has no reason to include "customer" --
+    it's not in REQUIRED_ORDER_FIELDS, only the synthetic generator adds it.
+    The LLM-deferral path used to do a bare order["customer"] lookup and
+    crash the whole request with a 500 on any uploaded order missing it."""
+    order = {"order_id": "ORD1", "amount": 1000.0,
+             "created_at": "2026-08-01T00:00:00", "razorpay_payment_id": "pay_1"}
+    settlement = {"settlement_id": "setl_1", "payment_id": "pay_1", "utr": "UTR_TRUNCATED",
+                  "amount": 1000.0, "settled_at": "2026-08-02"}
+    # amount matches within tolerance, but the UTR is nowhere in any bank
+    # line's narration -- this is exactly what routes an order to needs_llm.
+    bank_lines = [{"line_id": "bl1", "narration": "NEFT/garbled-narration/CUST TXN",
+                   "amount": 1000.0, "value_date": "2026-08-02"}]
+
+    result = matcher.reconcile([order], [settlement], bank_lines)  # must not raise
+
+    deferred = [c for c in result["needs_llm"] if c["order_id"] == "ORD1"]
+    assert len(deferred) == 1
+    assert deferred[0]["customer"] == "unknown"
+
+
 def test_duplicate_payment_id_across_orders_is_an_explicit_exception_not_a_silent_drop():
     orders = [
         {"order_id": "ORD_A", "customer": "X", "amount": 100.0,

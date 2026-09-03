@@ -450,14 +450,24 @@ def reconcile(orders: list[dict], settlements: list[dict], bank_lines: list[dict
                 needs_llm.append({
                     "order_id": order["order_id"], "settlement_id": stl["settlement_id"],
                     "expected_utr": stl["utr"], "expected_amount": stl["amount"],
-                    "customer": order["customer"],
+                    # cosmetic LLM-prompt context only, not part of
+                    # REQUIRED_ORDER_FIELDS -- uploaded orders.csv from a
+                    # real user has no reason to include it
+                    "customer": order.get("customer", "unknown"),
                 })
                 log("match", "deferred_to_llm", "rule", 0.0,
                     "settlement UTR not found verbatim in any bank line", order_id=order["order_id"])
 
         if len(candidate_settlements) > 1:
+            # `stl` here is whichever settlement was actually used above (the
+            # matched one, or candidate_settlements[0] for the primary
+            # exception) -- not necessarily the first item in the list. A
+            # settlement that matches later in the list (e.g. because its
+            # sibling's UTR wasn't found in any bank line) must still be
+            # excluded here, or it silently vanishes: neither matched nor
+            # flagged as its own exception.
             for extra in candidate_settlements:
-                if extra["settlement_id"] not in resolved_settlement_ids and extra is not candidate_settlements[0]:
+                if extra["settlement_id"] not in resolved_settlement_ids and extra is not stl:
                     exceptions.append({
                         "type": "duplicate_candidate", "order_id": order["order_id"],
                         "settlement_id": extra["settlement_id"],

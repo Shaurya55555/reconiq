@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from pathlib import Path
@@ -142,7 +143,23 @@ def _coerce_settlement_payment_ids(rows: list[dict]) -> list[dict]:
         row = dict(row)
         raw = row.get("payment_ids")
         if raw:
-            ids = [p.strip() for p in str(raw).split(",") if p.strip()]
+            raw = str(raw).strip()
+            ids = None
+            if raw.startswith("["):
+                # A CSV cell holding a JSON array (e.g. exported by a tool
+                # that serializes list-valued fields that way) is a
+                # plausible real-world variant of "multiple payment_ids in
+                # one cell" -- fall back to comma-splitting only if it
+                # doesn't actually parse as JSON, rather than silently
+                # producing garbage IDs like '["pay_1"' from a naive split.
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        ids = [str(p).strip() for p in parsed if str(p).strip()]
+                except (ValueError, TypeError):
+                    pass
+            if ids is None:
+                ids = [p.strip() for p in raw.split(",") if p.strip()]
             if ids:
                 row["payment_ids"] = ids
         out.append(row)
