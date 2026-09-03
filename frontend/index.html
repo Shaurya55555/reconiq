@@ -173,6 +173,15 @@
   .bar-track { flex: 1; background: var(--panel2); border: 1px solid var(--border-soft); border-radius: 4px; height: 14px; overflow: hidden; }
   .bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
   .bar-count { width: 34px; text-align: right; color: var(--muted); }
+  .pie-chart-row { display: flex; align-items: center; gap: 22px; }
+  .pie-chart-row svg { flex-shrink: 0; }
+  .pie-chart-row svg path, .pie-chart-row svg circle { cursor: pointer; transition: opacity 0.15s ease; }
+  .pie-chart-row svg path:hover, .pie-chart-row svg circle:hover { opacity: 0.8; }
+  .pie-legend { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+  .pie-legend-row { display: flex; align-items: center; gap: 8px; cursor: default; }
+  .pie-legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .pie-legend-label { color: var(--text); }
+  .pie-legend-count { color: var(--muted); margin-left: auto; padding-left: 10px; }
 
   /* Hero */
   .hero { padding: 28px 0 24px; text-align: left; border-bottom: 1px solid var(--border-soft); margin-bottom: 32px; }
@@ -618,6 +627,10 @@
         <h2 style="border:none;padding:0;margin-bottom:10px">Amount at risk by reason</h2>
         <div id="chart-exception-amounts"></div>
       </div>
+      <div class="chart-box">
+        <h2 style="border:none;padding:0;margin-bottom:10px">Matches by method (share)</h2>
+        <div id="chart-methods-pie"></div>
+      </div>
     </div>
   </section>
 
@@ -807,6 +820,7 @@ function toggleTheme() {
     renderMethodChart(currentRun.matches);
     renderExceptionChart(currentRun.exceptions);
     renderExceptionAmountChart(currentRun.exceptions);
+    renderMethodPieChart(currentRun.matches);
   }
 }
 applyThemeIcons();
@@ -837,6 +851,15 @@ const tagForMatch = (m) => m.method === "llm" && m.llm_resolution_source === "he
 const METHOD_COLORS_LIGHT = { exact: "#059669", fuzzy: "#D97706", group_split: "#0891B2", batch_settlement: "#16A34A", refunded: "#9333EA", llm: "#2563EB", human_override: "#7C3AED" };
 const METHOD_COLORS_DARK  = { exact: "#6fcf97", fuzzy: "#f2c94c", group_split: "#56c8e0", batch_settlement: "#7ee08a", refunded: "#b39ddb", llm: "#7aa2f7", human_override: "#c792ea" };
 const ALL_METHODS = ["exact", "fuzzy", "group_split", "batch_settlement", "refunded", "llm", "human_override"];
+const METHOD_DESCRIPTIONS = {
+  exact: "Settlement UTR found verbatim in a bank line, amount matches to the paisa -- the strongest possible evidence.",
+  fuzzy: "UTR matched; amount is within fee tolerance and the settlement date is within the reviewer's date-drift policy window.",
+  group_split: "One settlement's money arrived as 2-3 separate bank lines sharing its UTR, summing exactly to the settlement amount.",
+  batch_settlement: "Several orders' payments were consolidated by Razorpay into one settlement, settled as a single bank credit under one UTR.",
+  refunded: "Order was fully refunded before any settlement was expected -- Razorpay never generates a settlement for a fully refunded payment.",
+  llm: "Settlement's UTR wasn't found verbatim in any bank line -- resolved by reasoning over the narration, amount, and date (a real model call, or the offline heuristic when AI was unavailable).",
+  human_override: "A reviewer manually accepted, rejected, or paired this after reviewing the evidence -- not an automated decision.",
+};
 function isDarkTheme() { return document.documentElement.getAttribute("data-theme") === "dark"; }
 function methodColor(label) { return (isDarkTheme() ? METHOD_COLORS_DARK : METHOD_COLORS_LIGHT)[label] || (isDarkTheme() ? "#7d7360" : "#9CA3AF"); }
 function exceptionColor() { return isDarkTheme() ? "#f47174" : "#DC2626"; }
@@ -969,6 +992,7 @@ function renderAll(scrollTo = true) {
   renderMethodChart(currentRun.matches);
   renderExceptionChart(currentRun.exceptions);
   renderExceptionAmountChart(currentRun.exceptions);
+  renderMethodPieChart(currentRun.matches);
   renderExceptions(currentRun.exceptions);
   renderMatches(currentRun.matches);
   renderAudit(currentRun.audit_trail);
@@ -1402,6 +1426,70 @@ function renderMethodChart(matches) {
   matches.forEach(m => counts[m.method] = (counts[m.method] || 0) + 1);
   const entries = ALL_METHODS.filter(k => counts[k]).map(k => [k, counts[k]]);
   barChart("chart-methods", entries, (label) => methodColor(label));
+}
+
+function polarToCartesian(cx, cy, r, angleDeg) {
+  const rad = (angleDeg - 90) * Math.PI / 180;
+  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+}
+
+function pieSlicePath(cx, cy, r, startAngle, endAngle) {
+  const start = polarToCartesian(cx, cy, r, endAngle);
+  const end = polarToCartesian(cx, cy, r, startAngle);
+  const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
+  return `M ${cx} ${cy} L ${start.x} ${start.y} A ${r} ${r} 0 ${largeArcFlag} 0 ${end.x} ${end.y} Z`;
+}
+
+// Native <title> elements give a free, accessible hover tooltip -- same
+// convention this dashboard already uses everywhere else (see the `title`
+// attributes on the summary cards above), rather than a custom tooltip
+// component just for this one chart.
+function renderMethodPieChart(matches) {
+  const counts = {};
+  matches.forEach(m => counts[m.method] = (counts[m.method] || 0) + 1);
+  const entries = ALL_METHODS.filter(k => counts[k]).map(k => [k, counts[k]]);
+  const total = entries.reduce((sum, [, v]) => sum + v, 0);
+
+  if (!total) {
+    $("chart-methods-pie").innerHTML = '<div class="empty">No data.</div>';
+    return;
+  }
+
+  const r = 70, cx = 80, cy = 80;
+  let slicesSvg;
+  if (entries.length === 1) {
+    // A single-slice pie degenerates to a zero-length arc -- draw a plain
+    // circle for the 100%-one-method case instead.
+    const [label, count] = entries[0];
+    slicesSvg = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${methodColor(label)}">
+      <title>${esc(label)}: ${count} (100%)\n${esc(METHOD_DESCRIPTIONS[label] || "")}</title>
+    </circle>`;
+  } else {
+    let cumulative = 0;
+    slicesSvg = entries.map(([label, count]) => {
+      const pct = count / total;
+      const startAngle = cumulative * 360;
+      cumulative += pct;
+      const endAngle = cumulative * 360;
+      const path = pieSlicePath(cx, cy, r, startAngle, endAngle);
+      return `<path d="${path}" fill="${methodColor(label)}">
+        <title>${esc(label)}: ${count} (${Math.round(pct * 100)}%)\n${esc(METHOD_DESCRIPTIONS[label] || "")}</title>
+      </path>`;
+    }).join("");
+  }
+
+  const legend = entries.map(([label, count]) => `
+    <div class="pie-legend-row" title="${esc(METHOD_DESCRIPTIONS[label] || "")}">
+      <div class="pie-legend-dot" style="background:${methodColor(label)}"></div>
+      <div class="pie-legend-label">${esc(label)}</div>
+      <div class="pie-legend-count">${count} (${Math.round((count / total) * 100)}%)</div>
+    </div>`).join("");
+
+  $("chart-methods-pie").innerHTML = `
+    <div class="pie-chart-row">
+      <svg width="160" height="160" viewBox="0 0 160 160">${slicesSvg}</svg>
+      <div class="pie-legend">${legend}</div>
+    </div>`;
 }
 
 function renderExceptionChart(exceptions) {
