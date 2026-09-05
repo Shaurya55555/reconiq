@@ -793,7 +793,12 @@ function restoreRunFromStorage() {
     const raw = localStorage.getItem(RUN_STORAGE_KEY);
     if (!raw) return false;
     currentRun = JSON.parse(raw);
-    return !!(currentRun && currentRun.run_id);
+    // run_id only exists for synthetic runs (/api/run generates one);
+    // uploaded-data runs (/api/run-upload) are intentionally stateless and
+    // never have one, so gate on summary instead -- requiring run_id here
+    // silently dropped every uploaded-data run on reload/tab-sync, even
+    // though it was sitting untouched in storage the whole time.
+    return !!(currentRun && currentRun.summary);
   } catch (e) { return false; }
 }
 
@@ -1890,7 +1895,9 @@ $("calib-run-btn").addEventListener("click", runCalibration);
 
 if (restoreRunFromStorage()) {
   renderAll(false);
-  setStatus(`Restored run ${currentRun.run_id} from your last session.`, false);
+  setStatus(currentRun.run_id
+    ? `Restored run ${currentRun.run_id} from your last session.`
+    : "Restored your uploaded-data run from your last session.", false);
 }
 
 // Picks up overrides applied from the resolve-unmatched-orders dashboard
@@ -1899,7 +1906,9 @@ window.addEventListener("storage", (e) => {
   if (e.key !== RUN_STORAGE_KEY || !e.newValue) return;
   if (restoreRunFromStorage()) {
     renderAll(false);
-    setStatus(`Run updated (${currentRun.run_id}) from the resolve-unmatched-orders tab.`, false);
+    setStatus(currentRun.run_id
+      ? `Run updated (${currentRun.run_id}) from the resolve-unmatched-orders tab.`
+      : "Run updated from the resolve-unmatched-orders tab.", false);
   }
 });
 </script>

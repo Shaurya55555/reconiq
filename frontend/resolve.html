@@ -292,7 +292,7 @@ function render() {
   if (!queue.length) {
     $("queue").innerHTML = `<div class="empty">
       Nothing to resolve right now &mdash; no unmatched order currently has an unclaimed bank line to
-      match against in run ${esc(currentRun.run_id)}.
+      match against${currentRun.run_id ? ` in run ${esc(currentRun.run_id)}` : ""}.
     </div>`;
     return;
   }
